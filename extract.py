@@ -6,7 +6,7 @@ from sys import argv
 from os import path
 import subprocess as sp
 
-PVR_TEX_TOOL_PATH = "./PVRTexToolCLI"
+pathto = ""
 
 class POD2GLB:
 
@@ -37,27 +37,54 @@ class POD2GLB:
     self.glb.save(path)
 
   def convert_textures(self):  
-    for (textureIndex, texture) in enumerate(self.scene.textures):
-      self.glb.addImage({
-        "uri": texture.getPath(dir="", ext=".png")
-      })
-      self.glb.addSampler({
-        "magFilter": 9729,
-        "minFilter": 9987,
-        "wrapS": 10497,
-        "wrapT": 10497
-      })
-      self.glb.addTexture({
-        "name": texture.name,
-        "sampler": textureIndex,
-        "source": textureIndex
-      })
-      sp.call([
-        PVR_TEXT_TOOL_PATH,
-        "-f", "r8g8b8a8",
-        "-i", texture.getPath(dir="", ext=".pvr"),
-        "-d", texture.getPath(dir="", ext=".png")
-      ])
+    print("Converting textures...")
+    pathforcheck = (os.path.abspath(os.getcwd())) + "\\PVRTexToolCLI.exe"
+    print(pathforcheck)
+    SANITYCHECK = path.exists(pathforcheck)
+    if SANITYCHECK == True:
+        for (textureIndex, texture) in enumerate(self.scene.textures):
+            self.glb.addImage({
+                "uri": texture.getPath(dir="", ext=".png")
+            })
+            self.glb.addSampler({
+                "magFilter": 9729,
+                "minFilter": 9987,
+                "wrapS": 10497,
+                "wrapT": 10497
+            })
+            self.glb.addTexture({
+                "name": texture.name,
+                "sampler": textureIndex,
+                "source": textureIndex
+            })
+            sp.call([
+                "PVRTexToolCLI",
+                "-i", texture.getPath(dir=pathto + "\\..\\", ext=".pvr"),
+                "-d", texture.getPath(dir="", ext=".png")
+        ])
+        print("Hotfix for Miitomo - ignore if this isn't the game this POD belongs to")
+        for (textureIndex, texture) in enumerate(self.scene.textures):
+            self.glb.addImage({
+                "uri": texture.getPath(dir="", ext=".png")
+            })
+            self.glb.addSampler({
+                "magFilter": 9729,
+                "minFilter": 9987,
+                "wrapS": 10497,
+                "wrapT": 10497
+            })
+            self.glb.addTexture({
+                "name": texture.name,
+                "sampler": textureIndex,
+                "source": textureIndex
+            })
+            sp.call([
+                "PVRTexToolCLI",
+                "-i", texture.getPath(dir=pathto + "\\..\\textures\\android\\", ext=".pvr"),
+                "-d", texture.getPath(dir="", ext=".png")
+        ])
+    else:
+        print("You don't have PVRTexToolCLI downloaded or didn't put it in the same directory as the converter. To download it, go to https://developer.imaginationtech.com/solutions/pvrtextool/. If you have downloaded, move PVRTexToolCLI in the same directory as this script! The usual path (for Windows) is C:\\Imagination Technologies\\PowerVR_Graphics\\PowerVR_Tools\\PVRTexTool\\CLI\\Windows_x86_64.")
   
   def convert_materials(self):
     for (materialIndex, material) in enumerate(self.scene.materials):
@@ -133,12 +160,6 @@ class POD2GLB:
         data = bytearray(mesh.vertexElementData[0])
         stride = element["stride"]
         offset = element["offset"]
-        # loop through and fix all texture coords
-        while offset < len(data):
-          x, y = struct.unpack_from('<ff', data, offset)
-          y = (1 - y) - 1
-          struct.pack_into('<ff', data, offset, x, y)
-          offset += stride
         mesh.vertexElementData[0] = bytes(data)
 
       vertexBufferView = self.glb.addBufferView({
@@ -178,6 +199,12 @@ class POD2GLB:
           "mode": 4,
         }],
       })
-
-converter = POD2GLB.open(argv[1])
-converter.save(argv[2])
+try:
+  pathto = argv[1]
+  converter = POD2GLB.open(argv[1])
+except IndexError:
+  print("Please add a path to the POD!")
+try:
+  converter.save(argv[2])
+except IndexError:
+  print("Add the path/name of the GLB file!")
