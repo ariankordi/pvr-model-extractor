@@ -4,6 +4,7 @@ import struct
 import json
 from sys import argv
 from os import path
+import os
 import subprocess as sp
 
 pathto = ""
