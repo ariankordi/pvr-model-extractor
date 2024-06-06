@@ -1,8 +1,8 @@
 # PVR Model Extractor
 
-Crappy Python decompiler for the [PowerVR model]() format (`.pod`), built for ripping models from Nintendo's mobile games (particularly Miitomo). It includes utils to convert `.pod` models to the binary glTF (`.glb`) format.
+Crappy Python decompiler (made even crappier, but hey, it works) for the [PowerVR model]() format (`.pod`), built for ripping models from Nintendo's mobile games (particularly Miitomo). It includes utils to convert `.pod` models to the binary glTF (`.glb`) format.
 
-This tool is in an unfinished state, and will probably remain that way since I don't have the time/interest to support it. Please don't expect this to be easy to use or bug-free. 
+This tool works, but please make an issue in case for other models that break this extractor! This extractor was intended for Miitomo - if there was a better way I could have implemented some fixes let me know!
 
 ### Requirements
 
