@@ -4,6 +4,10 @@
 *.glb
 *.png
 *.bin
+*.exe
+*.fbx
+*.dll
+*.dds
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -121,3 +125,8 @@ noex64/
 optionalplugins/
 plugins/
 scenes/
+sample_pbr_e3.dds
+noegl_opengl.dll
+Noesis64.exe
+Noesis.exe
+noesiskinect.dll
