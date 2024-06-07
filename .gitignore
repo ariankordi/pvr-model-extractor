@@ -109,4 +109,15 @@ venv.bak/
 
 # mypy
 .mypy_cache/
+
+# Prevent us from getting copyrighted
 PVRTexToolCLI
+pvrtextoolcli
+PVRTEXTOOLCLI
+PVRTexToolCLI.exe
+pvrtextoolcli.exe
+PVRTEXTOOLCLI.exe
+noex64/
+optionalplugins/
+plugins/
+scenes/
