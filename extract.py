@@ -289,27 +289,28 @@ def NoesisFix(file):
     NoesisStuff(file, pathforcheck)
   else:
     print("[DEBUG] 64-bit version NOT detected.")
-  # Check if 32-bit version is available
-  if platform == "Windows":
-    pathforcheck = ((os.path.abspath(os.getcwd())) + "\\Noesis.exe")
-  elif platform == "Darwin":
-    pathforcheck = ((os.path.abspath(os.getcwd())) + "/Noesis.exe")
-  elif platform == "Linux":
-    pathforcheck = ((os.path.abspath(os.getcwd())) + "/Noesis.exe")
-  else:
-    pathforcheck = ((os.path.abspath(os.getcwd())) + "/Noesis.exe")
+  if FIX_COMPLETED == True:
+    # Check if 32-bit version is available
+    if platform == "Windows":
+      pathforcheck = ((os.path.abspath(os.getcwd())) + "\\Noesis.exe")
+    elif platform == "Darwin":
+      pathforcheck = ((os.path.abspath(os.getcwd())) + "/Noesis.exe")
+    elif platform == "Linux":
+      pathforcheck = ((os.path.abspath(os.getcwd())) + "/Noesis.exe")
+    else:
+      pathforcheck = ((os.path.abspath(os.getcwd())) + "/Noesis.exe")
     
-  # Override if user has a file path for Noesis
+    # Override if user has a file path for Noesis
 
-    if NOESIS != "":
-      print(f"[OVERRIDE] Overriding path for Noesis with {NOESIS}")
-      pathforcheck = NOESIS
-  print("[DEBUG] Path for Noesis should be in: " + pathforcheck)
-  if SANITYCHECK == True:
-    NoesisStuff(file, pathforcheck)
-  else:
-    if FIX_COMPLETED == False:
-      print("[FIX - ERROR!] Fix will NOT continue. You don't have Noesis downloaded or didn't put it in the same directory as the converter (Or you misspelled the NOESIS variable if you tried to override the paths!). To download it, go to https://www.richwhitehouse.com/index.php?content=inc_projects.php&showproject=91.")
+      if NOESIS != "":
+        print(f"[OVERRIDE] Overriding path for Noesis with {NOESIS}")
+        pathforcheck = NOESIS
+    print("[DEBUG] Path for Noesis should be in: " + pathforcheck)
+    if SANITYCHECK == True:
+      NoesisStuff(file, pathforcheck)
+    else:
+      if FIX_COMPLETED == False:
+        print("[FIX - ERROR!] Fix will NOT continue. You don't have Noesis downloaded or didn't put it in the same directory as the converter (Or you misspelled the NOESIS variable if you tried to override the paths!). To download it, go to https://www.richwhitehouse.com/index.php?content=inc_projects.php&showproject=91.")
 def help():
   print("""
 Help:

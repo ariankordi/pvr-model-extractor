@@ -1,4 +1,4 @@
-# PVR Model Extractor (GLB2FBX)
+# PVR Model Extractor (POD2GLB)
 
 Crappy Python decompiler (made even crappier, but hey, it works) for the [PowerVR model]() format (`.pod`), built for ripping models from Nintendo's mobile games (particularly Miitomo). It includes utils to convert `.pod` models to the binary glTF (`.glb`) format.
 
