@@ -81,7 +81,7 @@ class POD2GLB:
     for (textureIndex, texture) in enumerate(self.scene.textures):
       print(f"[Part 04-1] Adding image {texture.getPath()}...")
       self.glb.addImage({
-        "uri": texture.getPath(dir="", ext=".dds")
+        "uri": texture.getPath(dir="", ext=".png")
       })
       self.glb.addSampler({
         "magFilter": 9729,
