@@ -8,7 +8,7 @@ import json
 class GLBExporter:
   def __init__(self):
     self.data = bytes()
-    self.asset = {"version": "2.0"}
+    self.asset = {"version": "2.0", "generator": f"PicelBoi (originally made by jaames) POD2GLB", "copyright": "2024 (c) Imagination Technologies (POD File Format), 2024 (c) PicelBoi, 2018 (c) jaames"}
     self.scene = 0
     self.scenes = [{
       "nodes": []

@@ -31,13 +31,13 @@ steps:
 (This assumes you have Python 3.12.)
 
 Download POD2GLB.
-Register for a Imagination Technology account, and then download and install PVRTexTool.
+Register for a Imagination Technologies account, and then download and install PVRTexTool.
 Then move PVRTexToolCLI.exe/PVRTexToolCLI to the root of the POD2GLB script.
 (Optionally, you can also download Noesis and put it in the root of the script to auto-convert it to .fbx if you put the -f option at the end.)
 After that, launch Command Prompt.
-Type in "pip install numpy".
+Type in "pip install numpy pillow".
 Then you can now convert the pod model! Here's the anatomy of the command:
-python extract.py (pod file) (glb file) (-f if you have noesis)
+python pod2glb.py (pod file) (glb file) (-f if you have noesis)
 
 It should generate a GLB (or if you have the -f option, a companion FBX file) to be used in Blender or other sources. I recommend you use the FBX.
 

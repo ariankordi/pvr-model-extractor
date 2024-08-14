@@ -8,6 +8,10 @@
 *.fbx
 *.dll
 *.dds
+*.png.tex
+*.dae
+Outfits/
+MiitomoLUT/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -130,3 +134,5 @@ noegl_opengl.dll
 Noesis64.exe
 Noesis.exe
 noesiskinect.dll
+ReadMe.txt
+pluginsource.zip

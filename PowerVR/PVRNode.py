@@ -8,3 +8,4 @@ class PVRNode:
     self.parentIndex = -1
     self.animation = PVRAnimation()
     self.userData = None
+    self.IsCamera = False
