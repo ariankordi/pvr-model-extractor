@@ -6,9 +6,9 @@ This tool works, but please make an issue in case for other models that break th
 
 ### Requirements
 
-* Python 3.5 or above (Tested with Python 3.12)
+* Python 3.12 or above (Tested with Python 3.12)
 * PVRTexTool from the [Imgination Technology Website](https://developer.imaginationtech.com/solutions/pvrtextool/)
-* PVRTexTool CLI (instructions can be found on page 28 of the [PVRTexTool User Manual](https://docs.imgtec.com/tools-manuals/pvrtextool-manual/html/topics/introduction.html)). It is assumed to be located in the same directory as `extract.py`, so you may need to change `PVR_TEX_TOOL_PATH` to suit your setup.
+`PVR_TEX_TOOL_PATH` to suit your setup.
 * A glTF plugin for your 3D tool of choice, such as [this glTF plugin for Blender](https://docs.blender.org/manual/en/latest/addons/import_export/scene_gltf2.html). This will let you load .gltf models. 
 
 Optionally, you can install Noesis to automagically convert the GLB to FBX! [You can download Noesis here!](https://www.richwhitehouse.com/index.php?content=inc_projects.php&showproject=91)
