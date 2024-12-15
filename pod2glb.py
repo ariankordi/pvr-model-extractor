@@ -199,7 +199,7 @@ class POD2GLB:
                         print("[DEBUG] Alpha Map found.")
 
 
-        if SANITYCHECK:
+        if SANITYCHECK:  # Is PVRTexTool available?
             print("[Part 04-2] Now converting all images!")
 
             for root, dirs, files in os.walk(os.path.dirname(pathto)):
@@ -214,7 +214,10 @@ class POD2GLB:
                             "-i", os.path.join(root, pvr)
                         ])
                         print("[HOTFIX] PVRTexTool for some reason generates a _Out file, so automatically deleting that.")
-                        os.remove(os.path.join(root, os.path.splitext(pvr)[0] + "_Out.pvr"))
+                        try:
+                            os.remove(os.path.join(root, os.path.splitext(pvr)[0] + "_Out.pvr"))
+                        except FileNotFoundError:  # Ignore if that _Out file doesn't exist.
+                            pass
             if alphahotfix:
                 print("[HOTFIX] Due to contraints with GLTF files, alpha maps will be inserted into the diffuse map.")
                 for diffusemap in diffusearray:
