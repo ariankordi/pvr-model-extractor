@@ -15,13 +15,13 @@ Optionally, you can install Noesis to automagically convert the GLB to FBX! [You
 
 ### Usage
 
-`extract.py` can be used to convert `.pod` models to the `.glb` model format:
+`pod2glb.py` can be used to convert `.pod` models to the `.glb` model format:
 
 ```bash
-python3 extract.py <.pod model path> <.glb output path> <-f>
+python3 pod2glb.py <.pod model path> <.glb output path> <-f>
 ```
 
-Textures are assumed to be in the same directory as extract.py
+Textures are assumed to be in the same directory as pod2glb.py
 
 ### Installation Steps
 ```
