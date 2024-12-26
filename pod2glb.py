@@ -9,6 +9,14 @@ import platform
 import PIL
 import argparse
 
+# numpy is only needed for calculating bounding box
+hasnumpy = False
+try:
+    import numpy as np
+    hasnumpy = True
+except ImportError as e:
+    print(f"[WARNING] numpy could not be imported: {e}. Will not be able to calculate bounding box which is probably fine")
+
 # Override default paths for tools.
 # These are overridden by the argparse arguments.
 NOESIS_PATH = ""
@@ -34,6 +42,25 @@ print(f"""
 """)
 
 class POD2GLB:
+    # Table to resolve GLenum strings to values needed for glTF.
+    GLENUM = {
+        "GL_NEAREST": 9728,
+        "GL_LINEAR": 9729,
+        "GL_NEAREST_MIPMAP_NEAREST": 9784,
+        "GL_LINEAR_MIPMAP_NEAREST": 9785,
+        "GL_NEAREST_MIPMAP_LINEAR": 9786,
+        "GL_LINEAR_MIPMAP_LINEAR": 9787,
+        "GL_CLAMP_TO_EDGE": 33061,
+        "GL_MIRRORED_REPEAT": 33648,
+        "GL_REPEAT": 10497
+    }
+    # Samplers to add from the XML mapped to glTF materials.
+    sampler_table = {
+        "uAlbedoTexture": "pbrMetallicRoughness",
+        "uNormalTexture": "normalTexture",
+        "uMaskTexture": "emissiveTexture",
+        "uAlphaTexture": None  # "occlusionTexture"
+    }
 
     def __init__(self):
         self.glb = None
@@ -57,43 +84,44 @@ class POD2GLB:
         self.scene = self.pod.scene
         self.convert_meshes()
         self.convert_nodes()
-        self.convert_textures()
+        self.add_textures()
         self.convert_materials()
 
     def save(self, path):
         print("[Part 06] Saving all data to a GLB format...")
         if xmlroot is not None:
-            print('[WARNING] Due to constraints with GLTF, any Mask textures found will be attached as "Emission". It is up to you to reattach and correctly apply this map.')
+            print("[WARNING] Due to constraints with GLTF, any Mask textures found will be attached as \"Emission\". It is up to you to reattach and correctly apply this map.")
         self.glb.save(path)
         print("[FINISH!] Done!")
 
+    @staticmethod
     def findallsamplers(xmlmaterial):
         samplers = 0
         for material in xmlmaterial:
             samp = material.findall("Sampler2D")
             for sample in samp:
-                samplers = samplers + 1
+                samplers += 1
         print(f"[DEBUG] Found {samplers} in XML file.")
         return samplers
 
-    def convert_textures(self):
-        # Resolve strings to GLenum values.
-        GLENUM = {
-            "GL_NEAREST": 9728,
-            "GL_LINEAR": 9729,
-            "GL_NEAREST_MIPMAP_NEAREST": 9784,
-            "GL_LINEAR_MIPMAP_NEAREST": 9785,
-            "GL_NEAREST_MIPMAP_LINEAR": 9786,
-            "GL_LINEAR_MIPMAP_LINEAR": 9787,
-            "GL_CLAMP_TO_EDGE": 33061,
-            "GL_MIRRORED_REPEAT": 33648,
-            "GL_REPEAT": 10497
+    @staticmethod
+    def texture_from_sampler(sampler):
+        name = str(sampler.attrib["Name"])
+        filename = sampler.find("FileName").text
+        if filename is None:
+            print(f"[DEBUG] Texture {name} does not have a filename, marking as unused.")
+            return None  # Texture is not used.
+        # Replace .tga with .png: vv
+        path = str(filename).replace(".tga", ".png")
+        texture = {
+            "path": path,
+            "name": name
         }
+        return texture
 
-        alphahotfix = False
-        alphaarray = []
-        diffusearray = []
-        print("[Part 04] Converting textures...")
+    @staticmethod
+    # Returns either the path or False if it does not exist:
+    def get_pvrtextool_path_and_exists():
         slash = "\\" if platform == "Windows" else "/"
         suffix = ".exe" if platform == "Windows" else ""
         pvrtextool_path = f"{os.path.abspath(os.getcwd())}{slash}PVRTexToolCLI{suffix}"
@@ -104,8 +132,53 @@ class POD2GLB:
             pvrtextool_path = PVR_TEX_TOOL_PATH
         print(f"[DEBUG] Path for PVRTexToolCLI {overridden_text}is: {pvrtextool_path}")
         pvrtextool_exists = path.exists(pvrtextool_path)
+        ret = False if not pvrtextool_exists else pvrtextool_path
+        return ret
 
-        if pvrtextool_exists:  # Is PVRTexTool available?
+    @staticmethod
+    def convert_texture_single(tool_path, input_file, output):
+        print(f"[DEBUG] Running PVRTexTool. Will be saved at {output}")
+        sp.run([
+            tool_path,
+            "-d", output,
+            "-i", input_file
+        ], check=True)  # Tool will output to console.
+
+        pvr_out_fname = f"{os.path.splitext(input_file)[0]}_Out.pvr"
+        print(f"[HOTFIX] Deleting temporary PVRTexTool _Out file if it exists: {pvr_out_fname}")
+        try:
+            pvr_out_path = os.path.join(os.path.dirname(input_file), pvr_out_fname)
+            os.remove(pvr_out_path)
+        except FileNotFoundError:  # Ignore if that _Out file doesn't exist.
+            pass
+
+    def add_textures_no_conversion(self):
+        for (textureIndex, texture) in enumerate(self.scene.textures):
+            print(f"[Part 04-1] Adding image {texture.getPath()}...")
+
+            self.glb.addImage({
+                "uri": texture.getPath(dir="", ext=".png")
+            })
+            self.glb.addSampler({
+                "magFilter": self.GLENUM["GL_LINEAR"],
+                "minFilter": self.GLENUM["GL_LINEAR"],
+                "wrapS": self.GLENUM["GL_REPEAT"],
+                "wrapT": self.GLENUM["GL_REPEAT"]
+            })
+            self.glb.addTexture({
+                "name": texture.name,
+                "sampler": textureIndex,
+                "source": textureIndex
+            })
+
+    def convert_textures(self, alphaarray=[], diffusearray=[]):
+        if xmlroot is None:
+            # Assumes all textures are in current directory.
+            return self.add_textures_no_conversion()
+        print("[Part 04] Converting textures...")
+
+        pvrtextool_path = self.get_pvrtextool_path_and_exists()
+        if pvrtextool_path:  # Is PVRTexTool available?
             dir_of_input = os.path.dirname(pathto)
             print("[Part 04-2] Now converting all images. Walking path:")
 
@@ -116,258 +189,246 @@ class POD2GLB:
                     # Input is a pvr file:
                     output = os.path.join(os.path.dirname(pathout), os.path.basename(f"{os.path.splitext(file)[0]}.png"))
                     print(f"[Part 04-2] Converting {file} to png...")
-                    print(f"[DEBUG] Running PVRTexTool. Will be saved at {output}")
-                    sp.run([
-                        pvrtextool_path,
-                        "-d", output,
-                        "-i", os.path.join(root, file)
-                    ], check=True)  # Tool will output to console.
+                    input_file = os.path.join(root, file)
+                    self.convert_texture_single(pvrtextool_path, input_file, output)
 
-                    pvr_out_fname = f"{os.path.splitext(file)[0]}_Out.pvr"
-                    print(f"[HOTFIX] Deleting temporary PVRTexTool _Out file if it exists: {pvr_out_fname}")
+            # Apply alpha maps.
+            if not diffusearray:  # array is empty?
+                return  # assuming we have nothing else to do
+            print("[HOTFIX] Now merging alpha maps with albedo textures.")
+            for diffusemap in diffusearray:
+                for comalpha in range(len(diffusearray)):
+                    diffusepath = diffusemap
+                    if diffusepath is None or comalpha >= len(alphaarray):
+                        print("[DEBUG] Skipping alpha maps.")
+                        continue
                     try:
-                        pvr_out_path = os.path.join(root, pvr_out_fname)
-                        os.remove(pvr_out_path)
-                    except FileNotFoundError:  # Ignore if that _Out file doesn't exist.
-                        pass
-            if alphahotfix:
-                print("[HOTFIX] Due to contraints with GLTF files, alpha maps will be inserted into the diffuse map.")
-                for diffusemap in diffusearray:
-                    for comalpha in range(len(diffusearray)):
-                        diffusepath = diffusemap
-                        try:
-                            alphamap = PIL.Image.open(alphaarray[comalpha]).convert("L")
-                            diffusemap = PIL.Image.open(diffusemap).convert("RGB")
+                        alphamap = PIL.Image.open(alphaarray[comalpha]).convert("L")
+                        diffusemap = PIL.Image.open(diffusemap).convert("RGB")
 
-                            dw, dh = diffusemap.size
-                            alpharesize = (dw, dh)
-                            alphamap.resize(alpharesize)
-                            diffusemap.putalpha(alphamap)
-                            diffusemap.save(diffusepath)
-                        except FileNotFoundError:
-                            print("[DEBUG] Not applying non-exsistent alpha.")
+                        dw, dh = diffusemap.size
+                        alpharesize = (dw, dh)
+                        alphamap.resize(alpharesize)
+                        diffusemap.putalpha(alphamap)
+                        diffusemap.save(diffusepath)
+                        print("[DEBUG] Applied alpha map to diffuse map and re-saved.")
+                    except FileNotFoundError as e:
+                        print(f"[DEBUG] Caught: {e}. Not applying non-existent alpha.")
 
-        else:  # not pvrtextool_exists
-            print("[Part 04-2 - WARNING!] Textures will be added, but not converted (pvrtextool_exists == False). You don't have PVRTexToolCLI downloaded or didn't put it in the same directory as the converter (Or you misspelled string inside the PVRTEXTOOL variable if you tried to override the paths!). To download it, go to https://developer.imaginationtech.com/solutions/pvrtextool/. If you have downloaded, move PVRTexToolCLI in the same directory as this script! The usual path (for Windows) is C:\\Imagination Technologies\\PowerVR_Graphics\\PowerVR_Tools\\PVRTexTool\\CLI\\Windows_x86_64.")
+        else:  # not pvrtextool_path
+            print("[Part 04-2 - WARNING!] Textures will be added, but not converted (pvrtextool_path == False). You don't have PVRTexToolCLI downloaded or didn't put it in the same directory as the converter (Or you misspelled string inside the PVRTEXTOOL variable if you tried to override the paths!). To download it, go to https://developer.imaginationtech.com/solutions/pvrtextool/. If you have downloaded, move PVRTexToolCLI in the same directory as this script! The usual path (for Windows) is C:\\Imagination Technologies\\PowerVR_Graphics\\PowerVR_Tools\\PVRTexTool\\CLI\\Windows_x86_64.")
 
-        # Enumerate through XML for textures, or not.
-        if xmlroot is None:
-            # NON-XML PATH:
-            for (textureIndex, texture) in enumerate(self.scene.textures):
-                print(f"[Part 04-1] Adding image {texture.getPath()}...")
+    def add_textures(self):
+        if xmlroot is None:  # Take non-XML path.
+            return self.add_textures_no_conversion()
+        # Enchanced XML sampler import support
+        xmlmaterials = xmlroot.find("Materials")
+        xmlmaterial = xmlmaterials.findall("Material")
+        textureIndex = 0
 
-                self.glb.addImage({
-                    "uri": texture.getPath(dir="", ext=".png")
-                })
+        # Albedo textures that need conversion:
+        diffusearray = []  # Initialize and fill later: vv
+        # Alpha maps to apply to them:
+        alphaarray = []
+
+        for material in xmlmaterial:
+            # Iterate through all samplers to find
+            # uAlbedoTexture/uAlphaTexture.
+            for sampler in material.findall("Sampler2D"):
+                texture = self.texture_from_sampler(sampler)
+                if texture is None:
+                    continue
+                path = os.path.basename(texture["path"])
+                abspath = os.path.join(os.path.dirname(pathout), path)
+
+                if texture["name"] == "uAlbedoTexture":
+                    diffusearray.append(abspath)
+                    print("[DEBUG] Diffuse Map found.")
+                elif texture["name"] == "uAlphaTexture":
+                    alphaarray.append(abspath)
+                    print("[DEBUG] Alpha Map found.")
+
+        # Convert textures here.
+        self.convert_textures(alphaarray, diffusearray)
+        # Pass again to add textures.
+        for material in xmlmaterial:
+            for sampler in material.findall("Sampler2D"):
+                texture = self.texture_from_sampler(sampler)
+                if texture is None:
+                    continue
+                if texture["name"] not in self.sampler_table.keys():
+                    print(f"[DEBUG] Skipping image {texture["name"]} since it is not in sampler_table and will not be added as a sampler either.")
+                    continue
+
+                mag = sampler.find("GL_TEXTURE_MAG_FILTER")
+                min = sampler.find("GL_TEXTURE_MIN_FILTER")
+                S = sampler.find("GL_TEXTURE_WRAP_S")
+                T = sampler.find("GL_TEXTURE_WRAP_T")
+
+                magFilter = self.GLENUM.get(mag.text, self.GLENUM["GL_LINEAR"])  # Magnificiation filter
+                minFilter = self.GLENUM.get(min.text, self.GLENUM["GL_LINEAR"])  # Minification filter
+                wrapS = self.GLENUM.get(S.text, self.GLENUM["GL_REPEAT"])  # S (U) Wrapping Mode
+                wrapT = self.GLENUM.get(T.text, self.GLENUM["GL_REPEAT"])  # T (V) Wrapping Mode
+
+                print(f"[Part 04-1] Adding image {texture["name"]}, path {texture["path"]}...")
+
+                if embedimage:
+                    with open(texture["path"], "rb") as img_file:
+                        image_data = img_file.read()
+                    # Create a buffer view for the image
+                    buffer_view_index = self.glb.addBufferView({
+                        "buffer": 0,
+                        "byteOffset": self.glb.addData(image_data),  # buffer offset
+                        "byteLength": len(image_data)
+                    })
+                    print(f"[DEBUG] Read image in, adding as buffer view index {buffer_view_index}")
+                    # Add the image with bufferView and MIME type
+                    self.glb.addImage({
+                        "bufferView": buffer_view_index,
+                        "mimeType": "image/png",
+                        "name": os.path.basename(texture["path"]),
+                        #"uri": texture["path"]
+                    })
+                else:  # Just use a link to the local image.
+                    self.glb.addImage({
+                        "uri": texture["path"]
+                    })
+
                 self.glb.addSampler({
-                    "magFilter": GLENUM["GL_LINEAR"],
-                    "minFilter": GLENUM["GL_LINEAR"],
-                    "wrapS": GLENUM["GL_REPEAT"],
-                    "wrapT": GLENUM["GL_REPEAT"]
+                    "magFilter": magFilter,
+                    "minFilter": minFilter,
+                    "wrapS": wrapS,
+                    "wrapT": wrapT
                 })
                 self.glb.addTexture({
-                    "name": texture.name,
+                    "name": texture["name"],
                     "sampler": textureIndex,
                     "source": textureIndex
                 })
-        else:
-            # Enchanced XML sampler import support
-            xmlmaterials = xmlroot.find("Materials")
-            xmlmaterial = xmlmaterials.findall('Material')
-            textureIndex = 0
-            for material in xmlmaterial:
-                for sampler in material.findall('Sampler2D'):
-
-                    texture = {
-                        "path": str((sampler.find("FileName")).text).replace(".tga", ".png"),
-                        "name": str(sampler.attrib['Name'])
-                    }
-                    mag = sampler.find("GL_TEXTURE_MAG_FILTER")
-                    min = sampler.find("GL_TEXTURE_MIN_FILTER")
-                    S = sampler.find("GL_TEXTURE_WRAP_S")
-                    T = sampler.find("GL_TEXTURE_WRAP_T")
-
-                    magFilter = GLENUM.get(mag.text, GLENUM["GL_LINEAR"])  # Magnificiation filter
-                    minFilter = GLENUM.get(min.text, GLENUM["GL_LINEAR"])  # Minification filter
-                    wrapS = GLENUM.get(S.text, GLENUM["GL_REPEAT"])  # S (U) Wrapping Mode
-                    wrapT = GLENUM.get(T.text, GLENUM["GL_REPEAT"])  # T (V) Wrapping Mode
-
-                    print(f"[Part 04-1] Adding image {texture['name']}, path {texture['path']}...")
-
-                    if embedimage:
-                        if texture['path'] == 'None':
-                            continue
-
-                        with open(texture['path'], "rb") as img_file:
-                            image_data = img_file.read()
-                        # Create a buffer view for the image
-                        buffer_view_index = self.glb.addBufferView({
-                            "buffer": 0,
-                            "byteOffset": self.glb.addData(image_data),  # buffer offset
-                            "byteLength": len(image_data)
-                        })
-                        print(f"[DEBUG] Read image in, adding as buffer view index {buffer_view_index}")
-                        # Add the image with bufferView and MIME type
-                        self.glb.addImage({
-                            "bufferView": buffer_view_index,
-                            "mimeType": "image/png",
-                            "name": os.path.basename(texture['path']),
-                            #"uri": texture['path']
-                        })
-                    else:  # Just use a link to the local image.
-                        self.glb.addImage({
-                            "uri": texture.getPath(dir="", ext=".png")
-                        })
-
-                    self.glb.addSampler({
-                        "magFilter": magFilter,
-                        "minFilter": minFilter,
-                        "wrapS": wrapS,
-                        "wrapT": wrapT
-                    })
-                    self.glb.addTexture({
-                        "name": texture["name"],
-                        "sampler": textureIndex,
-                        "source": textureIndex
-                    })
-                    textureIndex = textureIndex + 1
-                    if texture["name"] == "uAlbedoTexture":
-                        diffusearray.append(os.path.join(os.path.dirname(pathout), os.path.basename(texture['path'])))
-                        print("[DEBUG] Diffuse Map found.")
-                    elif texture["name"] == "uAlphaTexture":
-                        alphaarray.append(os.path.join(os.path.dirname(pathout), os.path.basename(texture['path'])))
-                        alphahotfix = True
-                        print("[DEBUG] Alpha Map found.")
+                textureIndex += 1
 
     def convert_materials(self):
         print("[Part 05] Converting materials...")
-        if xmlroot is None:
-            for (materialIndex, material) in enumerate(self.scene.materials):
-                if material.diffuseTextureIndex > -1:
-                    pbr = {
-                        "baseColorTexture": {
-                            "index": material.diffuseTextureIndex,
-                        },
-                        "roughnessFactor": 1 - material.shininess,
-                    }
-                else:
-                    pbr = {
-                        "baseColorFactor": material.diffuse.tolist() + [1],
-                        "roughnessFactor": 1 - material.shininess,
-                    }
-                if material.bumpMapTextureIndex > -1:
-                    normal = {
-                        "index": material.bumpMapTextureIndex
-                    }
-                else:
-                    normal = {}
-                if material.opacityTextureIndex > -1:
-                    Alpha = {
-                        "index": material.bumpMapTextureIndex
-                    }
-                else:
-                    Alpha = {}
-
-                self.glb.addMaterial({
-                    "name": material.name,
-                    "pbrMetallicRoughness": pbr,
-                    "normalTexture": normal,
-                    "occlusionTexture": Alpha
-                })
-        else:
-            xmlmaterials = xmlroot.find("Materials")
-            xmlmaterial = xmlmaterials.findall('Material')
-            textureIndex = 0
-            for (materialIndex, material) in enumerate(self.scene.materials):
-                # Settings to list which option is available
-                hasAlpha = False
-                # Makes texture visible
-                Albedo = {
-                    "baseColorTexture": {},
-                    "roughnessFactor": 1 - material.shininess
+        if xmlroot is not None:
+            return self.convert_materials_with_xml()
+        # Standard non-XML path.
+        for (materialIndex, material) in enumerate(self.scene.materials):
+            if material.diffuseTextureIndex > -1:
+                pbr = {
+                    "baseColorTexture": {
+                        "index": material.diffuseTextureIndex,
+                    },
+                    "roughnessFactor": 1 - material.shininess,
                 }
-                Normal = {}
-                Mask = {}
+            else:
+                pbr = {
+                    "baseColorFactor": material.diffuse.tolist() + [1],
+                    "roughnessFactor": 1 - material.shininess,
+                }
+            if material.bumpMapTextureIndex > -1:
+                normal = {
+                    "index": material.bumpMapTextureIndex
+                }
+            else:
+                normal = {}
+            if material.opacityTextureIndex > -1:
+                Alpha = {
+                    "index": material.bumpMapTextureIndex
+                }
+            else:
                 Alpha = {}
-                for xmmaterial in xmlmaterial:
-                    print(f"[DEBUG] Material from POD Name is {material.name}")
-                    print(f"[DEBUG] Material from XML is called {xmmaterial.attrib['Name']}")
-                    if str(material.name) != xmmaterial.attrib['Name']:
-                        print(f"[DEBUG] Material is not the same! {xmmaterial.attrib['Name']} is not the same as {material.name}")
+
+            self.glb.addMaterial({
+                "name": material.name,
+                "pbrMetallicRoughness": pbr,
+                "normalTexture": normal,
+                "occlusionTexture": Alpha
+            })
+
+    def convert_materials_with_xml(self):
+        xmlmaterials = xmlroot.find("Materials")
+        xmlmaterial = xmlmaterials.findall("Material")
+        textureIndex = 0
+        for (materialIndex, material) in enumerate(self.scene.materials):
+            # Settings to list which option is available
+            for materialkeys in xmlmaterial:
+                print(f"[DEBUG] Material from POD Name is {material.name}, from XML: {materialkeys.attrib["Name"]}")
+                if str(material.name) != materialkeys.attrib["Name"]:
+                    #print(f"[DEBUG] Material is not the same! {materialkeys.attrib["Name"]} is not the same as {material.name}")
+                    continue
+
+                print(f"[Part 05-1] Adding material {material.name}...")
+
+                cull_mode_to_double_sided = {
+                    "None": True,
+                    "Back": False,
+                    "Front": False
+                    # NOTE: Front is NOT supported in glTF.
+                    # Also rare (headwear0063). Triangle windings
+                    # need to be flipped in the index
+                    # buffer in order to simulate this.
+                }
+                culling_key = materialkeys.find("Culling")
+                if culling_key == "Front":
+                    print("[WARNING] Culling is set to Front. This is not supported.")
+                # Double sided as false by default.
+                double_sided = cull_mode_to_double_sided.get(culling_key, False)
+                print(f"[DEBUG] Material {material.name} {"does NOT have" if double_sided else "has"} backface culling on.")
+
+                PODMaterial = {
+                    "name": material.name,
+                    # Albedo/uAlbedoTexture
+                    "pbrMetallicRoughness": {  # Makes texture visible
+                        "baseColorTexture": {},
+                        "roughnessFactor": 1 - material.shininess
+                    },
+                    # uNormalTexture
+                    "normalTexture": {},
+                    # uMaskTexture
+                    "emissiveTexture": {},
+                }
+                if double_sided:
+                    PODMaterial["doubleSided"] = double_sided
+
+                for sampler in materialkeys.findall("Sampler2D"):
+                    if "Name" not in sampler.attrib:
                         continue
+                    name = sampler.attrib["Name"]
+                    material_tex_name = self.sampler_table.get(name, None)
+                    if material_tex_name is not None:
+                        print(f"[DEBUG] Has sampler {name}!")
+                        # glTF validator: Unexpected property. vv
+                        if sampler.find("UVIdx") is not None:
+                            PODMaterial[material_tex_name]["texCoord"] = int((sampler.find("UVIdx")).text)
 
-                    for sampler in xmmaterial.findall('Sampler2D'):
-                        if sampler.attrib['Name'] == 'uAlbedoTexture':
-                            Albedo["baseColorTexture"] = {"index": int(textureIndex)}
-                            if sampler.find("UVIdx") is not None:
-                                Albedo["texCoord"] = int((sampler.find("UVIdx")).text)
-                            textureIndex = textureIndex + 1
-                            print("[DEBUG] Has albedo texture!")
+                        # uAlbedoTexture:
+                        if material_tex_name == "pbrMetallicRoughness":
+                            PODMaterial[material_tex_name]["baseColorTexture"] = {"index": int(textureIndex)}
+                        else:
+                            PODMaterial[material_tex_name]["index"] = int(textureIndex)
+                        textureIndex += 1
 
-                        # NOTE: hasNormal, hasMask are UNUSED!!
-                        elif sampler.attrib['Name'] == 'uNormalTexture':
-                            hasNormal = True
-                            Normal["index"] = int(textureIndex)
-                            if sampler.find("UVIdx") is not None:
-                                Normal["texCoord"] = int((sampler.find("UVIdx")).text)
-                            textureIndex += 1
-                            print("[DEBUG] Has normal texture!")
-
-                        elif sampler.attrib['Name'] == 'uMaskTexture':
-                            hasMask = True
-                            Mask["index"] = int(textureIndex)
-                            if sampler.find("UVIdx") is not None:
-                                Mask["texCoord"] = int((sampler.find("UVIdx")).text)
-                            textureIndex += 1
-                            print("[DEBUG] Has mask texture!")
-
-                        elif sampler.attrib['Name'] == 'uAlphaTexture':
-                            hasAlpha = True
-
-                            # Old alpha code.
-
-                            #Alpha["index"] = int(textureIndex)
-                            #if sampler.find("UVIdx") is not None:
-                            #    Alpha["texCoord"] = int((sampler.find("UVIdx")).text)
-                            #textureIndex += 1
-                            print("[DEBUG] Has alpha support!")
-
-                    print(f"[Part 05-1] Adding material {material.name}...")
-
-                    PODMaterial = {
-                        "name": material.name,
-                        "pbrMetallicRoughness": Albedo,
-                        "normalTexture": Normal,
-                        "emissiveTexture": Mask,
-                        "doubleSided": True,
-                    }
-
-                    if hasAlpha:
-                        # Old code.
-                        #PODMaterial["occlusionTexture"] = Alpha
+                # Set alphaMode to BLEND if IsXlu is enabled.
+                for isxlu in materialkeys.findall('IsXlu'):
+                    if isxlu.text == 'true':
                         PODMaterial["alphaMode"] = "BLEND"
 
-                    if xmmaterial.find("Culling") is not None:
-                        if xmmaterial.find("Culling").text == 'None':
-                            print(f"[DEBUG] Material {material.name} does NOT have backface culling on.")
-                        else:
-                            PODMaterial["doubleSided"] = False
-                            print(f"[DEBUG] Material {material.name} has backface culling on.")
-
-                    self.glb.addMaterial(PODMaterial)
+                self.glb.addMaterial(PODMaterial)
 
     def convert_nodes(self):
         print("[Part 03] Converting nodes...")
         for (nodeIndex, node) in enumerate(self.scene.nodes):
+            children = [i for (i, node) in enumerate(self.scene.nodes) if node.parentIndex == nodeIndex]
 
             nodeEntry = {
                 "name": node.name,
-                "children": [i for (i, node) in enumerate(self.scene.nodes) if node.parentIndex == nodeIndex],
                 "translation": node.animation.positions.tolist(),
                 "scale": node.animation.scales[0:3].tolist(),
                 "rotation": node.animation.rotations[0:4].tolist(),
             }
 
+            if children:  # skip if it is empty array
+                nodeEntry["children"] = children
 
             # if the node has a mesh index
             if node.index != -1:
@@ -392,7 +453,6 @@ class POD2GLB:
                 # for x in range(len(matrix)):
                 #     if x != 15 or:
                 #        rotationX = PVRMaths.PVRMatrix4x4RX3D()
-
 
     def convert_meshes(self):
         print("[Part 02] Converting meshes...")
@@ -420,21 +480,30 @@ class POD2GLB:
             # vertex buffer view
             vertexElements = mesh.vertexElements
 
+            # NOTE: Assuming that it's all in one vertex buffer...!!!
             vertexBufferView = self.glb.addBufferView({
                 "buffer": 0,
                 "byteOffset": self.glb.addData(mesh.vertexElementData[0]),
                 "byteStride": vertexElements["POSITION"]["stride"],
+                "target": 34962,  # ARRAY_BUFFER
                 "byteLength": len(mesh.vertexElementData[0]),
             })
 
             for name in vertexElements:
+                if name == "COLOR_0":
+                    # COLOR_0 is is R8G8B8A8_UNORM
+                    # it is not 4 floats, so adding it
+                    # will not work and cause "accessor
+                    # does not fit referenced bufferView..."
+                    print("[DEBUG] Model has COLOR_0 attribute. This is not supported, so it will be skipped.")
+                    continue
+
                 element = vertexElements[name]
                 componentType = 5126  # FLOAT
                 name_to_type = {
                     "TEXCOORD_0": "VEC2",
-                    "COLOR_0": "VEC4",
+                    #"COLOR_0": "VEC4",
                     # position, normal, tangent: vec3
-                    # NOTE: color is R8G8B8A8_UNORM and wont work(???)
                 }
                 type = name_to_type.get(name, "VEC3")  # vec3 default
 
@@ -447,6 +516,22 @@ class POD2GLB:
                     "type": type
                 }
 
+                # Make bounding box for position.
+                if name == "POSITION" and hasnumpy:
+                    # Import single vertex buffer.
+                    data = np.frombuffer(mesh.vertexElementData[0], dtype=np.float32)
+                    # 4 = sizeof(float)
+                    stride = int(vertexElements["POSITION"]["stride"] / 4)
+                    assert data.size % stride == 0, "oh no! the data is not divisible by the stride... did we assume "
+                    # Reshape into (-1, stride) to process the interleaved data
+                    data = data.reshape(-1, stride)
+                    positions = data[:, :3]
+
+                    # get min and max, convert np.array
+                    # float32 to list of floats
+                    accessor_data["min"] = [float(x) for x in positions.min(axis=0)]
+                    accessor_data["max"] = [float(x) for x in positions.max(axis=0)]
+
                 accessorIndex = self.glb.addAccessor(accessor_data)
                 attributes[name] = accessorIndex
 
@@ -457,7 +542,7 @@ class POD2GLB:
                 "primitives": [{
                     "attributes": attributes,
                     "indices": indicesAccessorIndex,
-                    "mode": 4,
+                    "mode": 4,  # triangles
                 }],
             })
 
@@ -546,7 +631,7 @@ def main():
             xmlpath = os.path.join(os.path.dirname(pathto), file)
             xmldata = etree.parse(xmlpath)
             xmlroot = xmldata.getroot()  # Global
-            print(f"Model is called \"{xmlroot.attrib['Name']}\"")
+            print(f"Model is called \"{xmlroot.attrib["Name"]}\"")
 
     converter = POD2GLB.open(pathto)
     converter.save(pathout)
