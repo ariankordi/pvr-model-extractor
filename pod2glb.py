@@ -19,6 +19,7 @@ FBX_CONV_COMPLETED = False
 pathto = ""
 pathout = ""
 xmlroot = None  # Non-null if an XML was found.
+embedimage = False
 platform = platform.system()  # Determines path of binaries.
 
 print(f"""
@@ -151,6 +152,7 @@ class POD2GLB:
 
         # Enumerate through XML for textures, or not.
         if xmlroot is None:
+            # NON-XML PATH:
             for (textureIndex, texture) in enumerate(self.scene.textures):
                 print(f"[Part 04-1] Adding image {texture.getPath()}...")
 
@@ -192,9 +194,30 @@ class POD2GLB:
 
                     print(f"[Part 04-1] Adding image {texture['name']}, path {texture['path']}...")
 
-                    self.glb.addImage({
-                        "uri": texture['path']
-                    })
+                    if embedimage:
+                        if texture['path'] == 'None':
+                            continue
+
+                        with open(texture['path'], "rb") as img_file:
+                            image_data = img_file.read()
+                        # Create a buffer view for the image
+                        buffer_view_index = self.glb.addBufferView({
+                            "buffer": 0,
+                            "byteOffset": self.glb.addData(image_data),  # buffer offset
+                            "byteLength": len(image_data)
+                        })
+                        print(f"[DEBUG] Read image in, adding as buffer view index {buffer_view_index}")
+                        # Add the image with bufferView and MIME type
+                        self.glb.addImage({
+                            "bufferView": buffer_view_index,
+                            "mimeType": "image/png",
+                            "name": os.path.basename(texture['path']),
+                            #"uri": texture['path']
+                        })
+                    else:  # Just use a link to the local image.
+                        self.glb.addImage({
+                            "uri": texture.getPath(dir="", ext=".png")
+                        })
 
                     self.glb.addSampler({
                         "magFilter": magFilter,
@@ -486,6 +509,8 @@ def main():
     # Optional flag to fix armature/convert to FBX.
     parser.add_argument("-f", "--fix-armature", action="store_true", help="Tries to fix Blender quirks with GLB files by converting it to a FBX file using Noesis.")
 
+    parser.add_argument("-e", "--embed-image", action="store_true", help="Embed images in the .glb itself, rather than alongside the model file. Needed to load the model in web browsers.")
+
     # Optional arguments to specify Noesis/PVRTexTool paths.
     parser.add_argument("--noesis-path", type=str, help="Path to Noesis binary.")
     parser.add_argument("--pvrtextool-path", type=str, help="Path to PVRTexTool.")
@@ -501,6 +526,11 @@ def main():
         NOESIS_PATH = args.noesis_path
     if args.pvrtextool_path:
         PVR_TEX_TOOL_PATH = args.pvrtextool_path
+
+    global embedimage
+    if args.embed_image is not None:
+        print("[DEBUG] Embedding all images in the output .glb.")
+        embedimage = args.embed_image
 
     # Check if a companion XML exists with the POD.
     expected_xml_path = str(os.path.basename(pathto)).replace(".pod", "_model.xml")
