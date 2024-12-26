@@ -2,27 +2,24 @@ import PIL.Image
 from PowerVR.PVRPODLoader import PVRPODLoader
 from GLB.GLBExporter import GLBExporter
 from xml.etree import ElementTree as etree
-from sys import argv
 from os import path
 import os
 import subprocess as sp
 import platform
 import PIL
+import argparse
 
-# Override paths for tools.
+# Override default paths for tools.
+# These are overridden by the argparse arguments.
 NOESIS_PATH = ""
 PVR_TEX_TOOL_PATH = ""
 
-# Global Variables
-FIX_COMPLETED = False  # Don't touch
+# Global Variables (Don't touch):
+FBX_CONV_COMPLETED = False
 pathto = ""
 pathout = ""
-xmlsupport = False
-xmlfile = None
-xmldata = None
-xmlroot = None
-xmlmodel = None
-platform = platform.system()
+xmlroot = None  # Non-null if an XML was found.
+platform = platform.system()  # Determines path of binaries.
 
 print(f"""
 -----------------------------------------------------------------------------------
@@ -34,15 +31,6 @@ print(f"""
 -----------------------------------------------------------------------------------
 
 """)
-print(f"[DEBUG] Platform is {platform}")
-
-# Utility function to get the path of a program.
-def get_platform_path(tool_name):
-    path_mapping = {
-        "Windows": f"{os.path.abspath(os.getcwd())}\\{tool_name}.exe",
-    }
-    # Use Linux mapping as the default (for macOS too):
-    return path_mapping.get(platform, f"{os.path.abspath(os.getcwd())}/{tool_name}")
 
 class POD2GLB:
 
@@ -73,7 +61,7 @@ class POD2GLB:
 
     def save(self, path):
         print("[Part 06] Saving all data to a GLB format...")
-        if xmlsupport:
+        if xmlroot is not None:
             print('[WARNING] Due to constraints with GLTF, any Mask textures found will be attached as "Emission". It is up to you to reattach and correctly apply this map.')
         self.glb.save(path)
         print("[FINISH!] Done!")
@@ -105,41 +93,42 @@ class POD2GLB:
         alphaarray = []
         diffusearray = []
         print("[Part 04] Converting textures...")
-        if platform == "Windows":
-            pvrtextool_path = ((os.path.abspath(os.getcwd())) + "\\PVRTexToolCLI.exe")
-        elif platform == "Darwin":
-            pvrtextool_path = ((os.path.abspath(os.getcwd())) + "/PVRTexToolCLI")
-        elif platform == "Linux":
-            pvrtextool_path = ((os.path.abspath(os.getcwd())) + "/PVRTexToolCLI")
-        else:
-            print("UNKNOWN PLATFORM! DEFAULTING TO LINUX...")
-            pvrtextool_path = ((os.path.abspath(os.getcwd())) + "/PVRTexToolCLI")
+        slash = "\\" if platform == "Windows" else "/"
+        suffix = ".exe" if platform == "Windows" else ""
+        pvrtextool_path = f"{os.path.abspath(os.getcwd())}{slash}PVRTexToolCLI{suffix}"
         # Override if user has a file path for PVRTexTool
+        overridden_text = ""
         if PVR_TEX_TOOL_PATH != "":
-            print(f"[OVERRIDE] Overriding path for PVRTexTool with {PVR_TEX_TOOL_PATH}")
+            overridden_text = "(OVERRIDDEN!) "
             pvrtextool_path = PVR_TEX_TOOL_PATH
-        print("[DEBUG] Path for PVRTexToolCLI should be in: " + pvrtextool_path)
+        print(f"[DEBUG] Path for PVRTexToolCLI {overridden_text}is: {pvrtextool_path}")
         pvrtextool_exists = path.exists(pvrtextool_path)
 
         if pvrtextool_exists:  # Is PVRTexTool available?
-            print("[Part 04-2] Now converting all images!")
+            dir_of_input = os.path.dirname(pathto)
+            print("[Part 04-2] Now converting all images. Walking path:")
 
-            for root, dirs, files in os.walk(os.path.dirname(pathto)):
-                for pvr in files:
-                    if str(pvr).endswith(".pvr"):
-                        output = os.path.join(os.path.dirname(pathout), os.path.basename(os.path.splitext(pvr)[0] + ".png"))
-                        print(f"[Part 04-2] Converting {pvr} to png...")
-                        print(f"[DEBUG] Will be saved at {output}")
-                        sp.call([
-                            pvrtextool_path,
-                            "-d", output,
-                            "-i", os.path.join(root, pvr)
-                        ])
-                        print("[HOTFIX] PVRTexTool for some reason generates a _Out file, so automatically deleting that.")
-                        try:
-                            os.remove(os.path.join(root, os.path.splitext(pvr)[0] + "_Out.pvr"))
-                        except FileNotFoundError:  # Ignore if that _Out file doesn't exist.
-                            pass
+            for root, dirs, files in os.walk(dir_of_input):
+                for file in files:
+                    if not str(file).endswith(".pvr"):
+                        continue  # Skip all non-pvr files.
+                    # Input is a pvr file:
+                    output = os.path.join(os.path.dirname(pathout), os.path.basename(f"{os.path.splitext(file)[0]}.png"))
+                    print(f"[Part 04-2] Converting {file} to png...")
+                    print(f"[DEBUG] Running PVRTexTool. Will be saved at {output}")
+                    sp.run([
+                        pvrtextool_path,
+                        "-d", output,
+                        "-i", os.path.join(root, file)
+                    ], check=True)  # Tool will output to console.
+
+                    pvr_out_fname = f"{os.path.splitext(file)[0]}_Out.pvr"
+                    print(f"[HOTFIX] Deleting temporary PVRTexTool _Out file if it exists: {pvr_out_fname}")
+                    try:
+                        pvr_out_path = os.path.join(root, pvr_out_fname)
+                        os.remove(pvr_out_path)
+                    except FileNotFoundError:  # Ignore if that _Out file doesn't exist.
+                        pass
             if alphahotfix:
                 print("[HOTFIX] Due to contraints with GLTF files, alpha maps will be inserted into the diffuse map.")
                 for diffusemap in diffusearray:
@@ -157,12 +146,11 @@ class POD2GLB:
                         except FileNotFoundError:
                             print("[DEBUG] Not applying non-exsistent alpha.")
 
+        else:  # not pvrtextool_exists
+            print("[Part 04-2 - WARNING!] Textures will be added, but not converted (pvrtextool_exists == False). You don't have PVRTexToolCLI downloaded or didn't put it in the same directory as the converter (Or you misspelled string inside the PVRTEXTOOL variable if you tried to override the paths!). To download it, go to https://developer.imaginationtech.com/solutions/pvrtextool/. If you have downloaded, move PVRTexToolCLI in the same directory as this script! The usual path (for Windows) is C:\\Imagination Technologies\\PowerVR_Graphics\\PowerVR_Tools\\PVRTexTool\\CLI\\Windows_x86_64.")
 
-        else:
-            print("[Part 04-2 - WARNING!] Textures will be added, but not converted. You don't have PVRTexToolCLI downloaded or didn't put it in the same directory as the converter (Or you misspelled string inside the PVRTEXTOOL variable if you tried to override the paths!). To download it, go to https://developer.imaginationtech.com/solutions/pvrtextool/. If you have downloaded, move PVRTexToolCLI in the same directory as this script! The usual path (for Windows) is C:\\Imagination Technologies\\PowerVR_Graphics\\PowerVR_Tools\\PVRTexTool\\CLI\\Windows_x86_64.")
-
-
-        if not xmlsupport:
+        # Enumerate through XML for textures, or not.
+        if xmlroot is None:
             for (textureIndex, texture) in enumerate(self.scene.textures):
                 print(f"[Part 04-1] Adding image {texture.getPath()}...")
 
@@ -230,7 +218,7 @@ class POD2GLB:
 
     def convert_materials(self):
         print("[Part 05] Converting materials...")
-        if not xmlsupport:
+        if xmlroot is None:
             for (materialIndex, material) in enumerate(self.scene.materials):
                 if material.diffuseTextureIndex > -1:
                     pbr = {
@@ -281,67 +269,69 @@ class POD2GLB:
                 for xmmaterial in xmlmaterial:
                     print(f"[DEBUG] Material from POD Name is {material.name}")
                     print(f"[DEBUG] Material from XML is called {xmmaterial.attrib['Name']}")
-                    if str(material.name) == xmmaterial.attrib['Name']:
-                        for sampler in xmmaterial.findall('Sampler2D'):
-                            if sampler.attrib['Name'] == 'uAlbedoTexture':
-                                Albedo["baseColorTexture"] = {"index": int(textureIndex)}
-                                if sampler.find("UVIdx") is not None:
-                                    Albedo["texCoord"] = int((sampler.find("UVIdx")).text)
-                                textureIndex = textureIndex + 1
-                                print("[DEBUG] Has albedo texture!")
-
-                            elif sampler.attrib['Name'] == 'uNormalTexture':
-                                hasNormal = True
-                                Normal["index"] = int(textureIndex)
-                                if sampler.find("UVIdx") is not None:
-                                    Normal["texCoord"] = int((sampler.find("UVIdx")).text)
-                                textureIndex += 1
-                                print("[DEBUG] Has normal texture!")
-
-                            elif sampler.attrib['Name'] == 'uMaskTexture':
-                                hasMask = True
-                                Mask["index"] = int(textureIndex)
-                                if sampler.find("UVIdx") is not None:
-                                    Mask["texCoord"] = int((sampler.find("UVIdx")).text)
-                                textureIndex += 1
-                                print("[DEBUG] Has mask texture!")
-
-                            elif sampler.attrib['Name'] == 'uAlphaTexture':
-                                hasAlpha = True
-
-                                # Old alpha code.
-
-                                #Alpha["index"] = int(textureIndex)
-                                #if sampler.find("UVIdx") is not None:
-                                #    Alpha["texCoord"] = int((sampler.find("UVIdx")).text)
-                                #textureIndex += 1
-                                print("[DEBUG] Has alpha support!")
-
-                        print(f"[Part 05-1] Adding material {material.name}...")
-
-                        PODMaterial = {
-                            "name": material.name,
-                            "pbrMetallicRoughness": Albedo,
-                            "normalTexture": Normal,
-                            "emissiveTexture": Mask,
-                            "doubleSided": True,
-                        }
-
-                        if hasAlpha:
-                            # Old code.
-                            #PODMaterial["occlusionTexture"] = Alpha
-                            PODMaterial["alphaMode"] = "BLEND"
-
-                        if xmmaterial.find("Culling") is not None:
-                            if xmmaterial.find("Culling").text == 'None':
-                                print(f"[DEBUG] Material {material.name} does NOT have backface culling on.")
-                            else:
-                                PODMaterial["doubleSided"] = False
-                                print(f"[DEBUG] Material {material.name} has backface culling on.")
-
-                        self.glb.addMaterial(PODMaterial)
-                    else:
+                    if str(material.name) != xmmaterial.attrib['Name']:
                         print(f"[DEBUG] Material is not the same! {xmmaterial.attrib['Name']} is not the same as {material.name}")
+                        continue
+
+                    for sampler in xmmaterial.findall('Sampler2D'):
+                        if sampler.attrib['Name'] == 'uAlbedoTexture':
+                            Albedo["baseColorTexture"] = {"index": int(textureIndex)}
+                            if sampler.find("UVIdx") is not None:
+                                Albedo["texCoord"] = int((sampler.find("UVIdx")).text)
+                            textureIndex = textureIndex + 1
+                            print("[DEBUG] Has albedo texture!")
+
+                        # NOTE: hasNormal, hasMask are UNUSED!!
+                        elif sampler.attrib['Name'] == 'uNormalTexture':
+                            hasNormal = True
+                            Normal["index"] = int(textureIndex)
+                            if sampler.find("UVIdx") is not None:
+                                Normal["texCoord"] = int((sampler.find("UVIdx")).text)
+                            textureIndex += 1
+                            print("[DEBUG] Has normal texture!")
+
+                        elif sampler.attrib['Name'] == 'uMaskTexture':
+                            hasMask = True
+                            Mask["index"] = int(textureIndex)
+                            if sampler.find("UVIdx") is not None:
+                                Mask["texCoord"] = int((sampler.find("UVIdx")).text)
+                            textureIndex += 1
+                            print("[DEBUG] Has mask texture!")
+
+                        elif sampler.attrib['Name'] == 'uAlphaTexture':
+                            hasAlpha = True
+
+                            # Old alpha code.
+
+                            #Alpha["index"] = int(textureIndex)
+                            #if sampler.find("UVIdx") is not None:
+                            #    Alpha["texCoord"] = int((sampler.find("UVIdx")).text)
+                            #textureIndex += 1
+                            print("[DEBUG] Has alpha support!")
+
+                    print(f"[Part 05-1] Adding material {material.name}...")
+
+                    PODMaterial = {
+                        "name": material.name,
+                        "pbrMetallicRoughness": Albedo,
+                        "normalTexture": Normal,
+                        "emissiveTexture": Mask,
+                        "doubleSided": True,
+                    }
+
+                    if hasAlpha:
+                        # Old code.
+                        #PODMaterial["occlusionTexture"] = Alpha
+                        PODMaterial["alphaMode"] = "BLEND"
+
+                    if xmmaterial.find("Culling") is not None:
+                        if xmmaterial.find("Culling").text == 'None':
+                            print(f"[DEBUG] Material {material.name} does NOT have backface culling on.")
+                        else:
+                            PODMaterial["doubleSided"] = False
+                            print(f"[DEBUG] Material {material.name} has backface culling on.")
+
+                    self.glb.addMaterial(PODMaterial)
 
     def convert_nodes(self):
         print("[Part 03] Converting nodes...")
@@ -449,104 +439,92 @@ class POD2GLB:
             })
 
 def run_noesis_conversion(file, noesis_path):
-    print("Using Noesis to convert to FBX as a way to fix it mainly because I'm lazy")
-    if platform == "Windows":
-        print("[FIX 01] Platform is Windows/MS-DOS, running Noesis natively")
-        sp.call([
-            noesis_path,
-            "?cmode",
-            file,
-            os.path.basename(os.path.splitext(file)[0] + ".fbx")
-        ])
-    else:
+    print("Using Noesis to convert to FBX as a way to fix it mainly because I'm lazy. Running now")
+    out_file = os.path.basename(f"{os.path.splitext(file)[0]}.fbx")
+    noesis_command = [noesis_path, "?cmode", file, out_file]
+    if platform != "Windows":
+        noesis_command = ["wine"] + noesis_command
         print("[FIX 01] Trying to use Wine to run Noesis")
-        sp.call([
-            "wine " + noesis_path,
-            "?cmode",
-            file,
-            os.path.basename(os.path.splitext(file)[0] + ".fbx")
-        ])
+    sp.run(noesis_command, check=True)
     print("[FIX - FINISH!] Should generate a FBX file - use that instead of the GLB file.")
-    global FIX_COMPLETED
-    FIX_COMPLETED = True
+    global FBX_CONV_COMPLETED
+    FBX_CONV_COMPLETED = True
 
-def convert_to_fbx(file):
+def convert_to_fbx(file):  # Using Noesis/--fix-armature
     print("[FIX 00] Trying to convert the GLB to FBX because Blender doesn't understand the armature this tool generates.")
     # Check if 64-bit version is available
-    if platform == "Windows":
-        noesis_path = ((os.path.abspath(os.getcwd())) + "\\Noesis64.exe")
-    else:
-        noesis_path = ((os.path.abspath(os.getcwd())) + "/Noesis64.exe")
+    slash = "\\" if platform == "Windows" else "/"
+    noesis_path = f"{os.path.abspath(os.getcwd())}{slash}Noesis64.exe"
 
-    print("[DEBUG] Path for Noesis should be in: " + noesis_path)
-    noesis_exists = path.exists(noesis_path)
-    if noesis_exists:
+    print(f"[DEBUG] Path for Noesis should be: {noesis_path}")
+    if path.exists(noesis_path):
+        run_noesis_conversion(file, noesis_path)
+        return  # Finish and do not go further.
+    # not noesis_exists:
+    print("[DEBUG] 64-bit version NOT found. Trying 32-bit/override path.")
+
+    # Check if 32-bit version is available
+    noesis_path = f"{os.path.abspath(os.getcwd())}{slash}Noesis.exe"
+    # Override if user has a path set for Noesis.
+    if NOESIS_PATH != "":
+        print(f"[OVERRIDE] Overriding path for Noesis with {NOESIS_PATH}")
+        noesis_path = NOESIS_PATH
+    print(f"[DEBUG] Trying Noesis path: {noesis_path}")
+    if path.exists(noesis_path):
         run_noesis_conversion(file, noesis_path)
     else:
-        print("[DEBUG] 64-bit version NOT detected.")
-    if FIX_COMPLETED:
-        # Check if 32-bit version is available
-        if platform == "Windows":
-            noesis_path = ((os.path.abspath(os.getcwd())) + "\\Noesis.exe")
-        else:
-            noesis_path = ((os.path.abspath(os.getcwd())) + "/Noesis.exe")
+        print("[FIX - ERROR!] Fix will NOT continue. You don't have Noesis downloaded or didn't put it in the same directory as the converter (Or you misspelled the NOESIS_PATH variable if you tried to override the paths!). To download it, go to https://www.richwhitehouse.com/index.php?content=inc_projects.php&showproject=91.")
 
-        # Override if user has a file path for Noesis
+def main():
+    # Create argparse instance and add arguments.
+    parser = argparse.ArgumentParser(description="Converts POD models from Miitomo to glTF (.glb) format.")
 
-            if NOESIS_PATH != "":
-                print(f"[OVERRIDE] Overriding path for Noesis with {NOESIS_PATH}")
-                noesis_path = NOESIS_PATH
-        print("[DEBUG] Path for Noesis should be in: " + noesis_path)
-        if noesis_exists:
-            run_noesis_conversion(file, noesis_path)
-        else:
-            if not FIX_COMPLETED:
-                print("[FIX - ERROR!] Fix will NOT continue. You don't have Noesis downloaded or didn't put it in the same directory as the converter (Or you misspelled the NOESIS_PATH variable if you tried to override the paths!). To download it, go to https://www.richwhitehouse.com/index.php?content=inc_projects.php&showproject=91.")
+    # Add positional arguments.
+    parser.add_argument("pod_path", type=str, help="Path to the input POD file. The XML and textures are expected to be relative to this.")
+    parser.add_argument("glb_path", type=str, help="Path to the output glTF model/.glb file.")
 
-def help():
-    print("""
-Help:
-extract.py [POD path] [GLB path] [-f]
+    # Optional flag to fix armature/convert to FBX.
+    parser.add_argument("-f", "--fix-armature", action="store_true", help="Tries to fix Blender quirks with GLB files by converting it to a FBX file using Noesis.")
 
-Options:
--f: Tries to fix Blender quirks with GLB files by converting it to a FBX file using Noesis.
+    # Optional arguments to specify Noesis/PVRTexTool paths.
+    parser.add_argument("--noesis-path", type=str, help="Path to Noesis binary.")
+    parser.add_argument("--pvrtextool-path", type=str, help="Path to PVRTexTool.")
+    args = parser.parse_args()
 
-Advanced:
-(Both variables have to be set inside the Python script. If you need to reset, just clear everything in the string.)
-PVR_TEX_TOOL_PATH: Variable used to override the location of PVRTexToolCli.
-NOESIS_PATH: Variable used to override the location of Noesis.
-""")
-#try:
-pathto = argv[1]
-pathout = argv[2]
-# Check if a companion XML exists with the POD.
-check = str(os.path.basename(pathto)).replace(".pod", "_model.xml")
-print(f"[DEBUG] File to check is {check}")
-for root, dirs, files in os.walk(os.path.dirname(pathto)):
-    for xml in files:
-        if str(xml).endswith(".xml"):
-            print(f"[DEBUG] xml file to check is {xml}")
-        if xml == check:
-            xmlsupport = True
-            print("[XML] XML Detected!")
-            xmlfile = xml
-            xmldata = etree.parse(os.path.join(os.path.dirname(pathto), xmlfile))
-            xmlroot = xmldata.getroot()
-            print(f"Model is called {xmlroot.attrib["Name"]}")
+    global pathto, pathout  # Used when converting textures.
+    pathto = args.pod_path
+    pathout = args.glb_path
 
-converter = POD2GLB.open(argv[1])
-#except IndexError:
-#    help()
-#    print("[ERROR!] Please add a path to the POD!")
-try:
-    converter.save(argv[2])
-except IndexError:
-    help()
-    print("[ERROR!] Add the path/name of the GLB file!")
-except NameError:
-    print("[ERROR!] GLB not specified.")
-try:
-    if argv[3] == "--fix-armature" or "-f":
-        convert_to_fbx(argv[2])
-except IndexError:
-    print("[DEBUG] Will not convert to FBX via Noesis as -f or --fix-armature option was not specified.")
+    # Set Noesis and PVRTexTool paths.
+    global NOESIS_PATH, PVR_TEX_TOOL_PATH
+    if args.noesis_path:
+        NOESIS_PATH = args.noesis_path
+    if args.pvrtextool_path:
+        PVR_TEX_TOOL_PATH = args.pvrtextool_path
+
+    # Check if a companion XML exists with the POD.
+    expected_xml_path = str(os.path.basename(pathto)).replace(".pod", "_model.xml")
+    print(f"[DEBUG] Expected XML path for this POD: {expected_xml_path}")
+
+    global xmlroot  # Global that's initialized to None.
+    for root, dirs, files in os.walk(os.path.dirname(pathto)):
+        for file in files:
+            if file != expected_xml_path:
+                continue  # Skip if this file is not expected.
+            # File has been found:
+            print(f"[XML] XML file found: {str(file)}")
+            xmlpath = os.path.join(os.path.dirname(pathto), file)
+            xmldata = etree.parse(xmlpath)
+            xmlroot = xmldata.getroot()  # Global
+            print(f"Model is called \"{xmlroot.attrib['Name']}\"")
+
+    converter = POD2GLB.open(pathto)
+    converter.save(pathout)
+
+    if args.fix_armature:
+        convert_to_fbx(pathout)
+    else:
+        print("[DEBUG] Will not convert to FBX as --fix-armature option was not specified.")
+
+if __name__ == "__main__":
+    main()
