@@ -222,8 +222,8 @@ class PVRTexture:
     def setName(self, name: str):
         self.name = path.splitext(name)[0]
 
-    def getPath(self, directory: str = "./", extension: str = ".pvr") -> str:
-        return path.join(directory, self.name + extension)
+    def getPath(self, dir: str = "./", ext: str = ".pvr") -> str:
+        return path.join(dir, self.name + ext)
 
     @classmethod
     def from_file(cls, file_path: str) -> 'PVRTexture':

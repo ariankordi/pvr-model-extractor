@@ -313,37 +313,31 @@ class POD2GLB:
             return self.convert_materials_with_xml()
         # Standard non-XML path.
         for (materialIndex, material) in enumerate(self.scene.materials):
+            materialGLB = {
+                "name": material.name,
+            }
             if material.diffuseTextureIndex > -1:
-                pbr = {
+                materialGLB["pbrMetallicRoughness"] = {
                     "baseColorTexture": {
                         "index": material.diffuseTextureIndex,
                     },
                     "roughnessFactor": 1 - material.shininess,
                 }
             else:
-                pbr = {
+                materialGLB["pbrMetallicRoughness"] = {
                     "baseColorFactor": material.diffuse.tolist() + [1],
                     "roughnessFactor": 1 - material.shininess,
                 }
             if material.bumpMapTextureIndex > -1:
-                normal = {
+                materialGLB["normalTexture"] = {
                     "index": material.bumpMapTextureIndex
                 }
-            else:
-                normal = {}
             if material.opacityTextureIndex > -1:
-                Alpha = {
+                materialGLB["occlusionTexture"] = {
                     "index": material.bumpMapTextureIndex
                 }
-            else:
-                Alpha = {}
 
-            self.glb.addMaterial({
-                "name": material.name,
-                "pbrMetallicRoughness": pbr,
-                "normalTexture": normal,
-                "occlusionTexture": Alpha
-            })
+            self.glb.addMaterial(materialGLB)
 
     def convert_materials_with_xml(self):
         xmlmaterials = xmlroot.find("Materials")
