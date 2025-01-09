@@ -1,6 +1,7 @@
 import PIL.Image
 from PowerVR.PVRPODLoader import PVRPODLoader
 from GLB.GLBExporter import GLBExporter
+from PowerVR.PVRMesh import EPVRMesh
 from xml.etree import ElementTree as etree
 from os import path
 import os
@@ -60,6 +61,22 @@ class POD2GLB:
         "uNormalTexture": "normalTexture",
         "uMaskTexture": "emissiveTexture",
         "uAlphaTexture": None  # "occlusionTexture"
+    }
+    # https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#accessor-data-types
+    num_components_to_accessor_types = {
+        1: "SCALAR",
+        2: "VEC2",
+        3: "VEC3",
+        4: "VEC4"
+    }
+    # https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#accessor-data-types
+    vertex_data_type_to_accessor_data_types = {
+        13: 5120,  # EPVRMesh.VertexData.eByte
+        10: 5121,  # EPVRMesh.VertexData.eUnsignedByte
+        11: 5122,  # EPVRMesh.VertexData.eShort
+        3: 5123,   # EPVRMesh.VertexData.eUnsignedShort
+        17: 5125,  # EPVRMesh.VertexData.eUnsignedInt
+        1: 5126    # EPVRMesh.VertexData.eFloat
     }
 
     def __init__(self):
@@ -442,6 +459,7 @@ class POD2GLB:
             if node.animation.matrices is not None:
                 print(f"Converting matrix animation data for: {node.name}")
                 print("Currently animation porting is not available at this time, sorry :(")
+                print(node.animation.matrices)
                 # keyframes = []
                 # matrix = node.animation.matrices.tolist()
                 # for x in range(len(matrix)):
@@ -482,6 +500,7 @@ class POD2GLB:
                 "target": 34962,  # ARRAY_BUFFER
                 "byteLength": len(mesh.vertexElementData[0]),
             })
+            print(f"[DEBUG] Creating bufferView for mesh {meshIndex}, length: {len(mesh.vertexElementData[0])}")
 
             for name in vertexElements:
                 if name == "COLOR_0":
@@ -493,13 +512,16 @@ class POD2GLB:
                     continue
 
                 element = vertexElements[name]
-                componentType = 5126  # FLOAT
-                name_to_type = {
-                    "TEXCOORD_0": "VEC2",
-                    #"COLOR_0": "VEC4",
-                    # position, normal, tangent: vec3
-                }
-                type = name_to_type.get(name, "VEC3")  # vec3 default
+                accessorType = self.num_components_to_accessor_types \
+                    .get(element["numComponents"], None)
+                if accessorType is None:
+                    raise NotImplementedError(f"Don't have glTF accessor data type for number of components: {element["numComponents"]}")
+
+                componentType = self.vertex_data_type_to_accessor_data_types \
+                    .get(element["dataType"], None)
+
+                if componentType is None:
+                    raise NotImplementedError(f"Don't have glTF accessor type for corresponding EPVR vertex data type: {element["dataType"]}")
 
                 accessor_data = {
                     "bufferView": vertexBufferView,
@@ -507,7 +529,7 @@ class POD2GLB:
                     # https://github.com/KhronosGroup/glTF/blob/master/specification/2.0/README.md#accessor-element-size
                     "componentType": componentType,
                     "count": numVertices,
-                    "type": type
+                    "type": accessorType
                 }
 
                 # Make bounding box for position.
@@ -527,6 +549,7 @@ class POD2GLB:
                     accessor_data["max"] = [float(x) for x in positions.max(axis=0)]
 
                 accessorIndex = self.glb.addAccessor(accessor_data)
+                print(f"[DEBUG] Creating accessor {accessorIndex} for attribute {name}")
                 attributes[name] = accessorIndex
 
             # POD meshes only have one primitive?
