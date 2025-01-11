@@ -1,34 +1,35 @@
-# File paths for advanced people
-NOESIS = ""
-PVRTEXTOOL = ""
-
-# Don't touch.
-
-FIX_COMPLETED = False
-
 import PIL.Image
 from PowerVR.PVRPODLoader import PVRPODLoader
 from GLB.GLBExporter import GLBExporter
-from PowerVR.PVRMaths import PVRMaths
-import struct
-import json
+from PowerVR.PVRMesh import EPVRMesh
 from xml.etree import ElementTree as etree
-from sys import argv
 from os import path
 import os
 import subprocess as sp
 import platform
 import PIL
+import argparse
 
-# Global Variables
+# numpy is only needed for calculating bounding box
+hasnumpy = False
+try:
+    import numpy as np
+    hasnumpy = True
+except ImportError as e:
+    print(f"[WARNING] numpy could not be imported: {e}. Will not be able to calculate bounding box which is probably fine")
+
+# Override default paths for tools.
+# These are overridden by the argparse arguments.
+NOESIS_PATH = ""
+PVR_TEX_TOOL_PATH = ""
+
+# Global Variables (Don't touch):
+FBX_CONV_COMPLETED = False
 pathto = ""
 pathout = ""
-xmlsupport = False
-xmlfile = None
-xmldata = None
-xmlroot = None
-xmlmodel = None
-platform = platform.system()
+xmlroot = None  # Non-null if an XML was found.
+embedimage = False
+platform = platform.system()  # Determines path of binaries.
 
 print(f"""
 -----------------------------------------------------------------------------------
@@ -40,551 +41,622 @@ print(f"""
 -----------------------------------------------------------------------------------
 
 """)
-print(f"[DEBUG] Platform is {platform}")
+
 class POD2GLB:
+    # Table to resolve GLenum strings to values needed for glTF.
+    GLENUM = {
+        "GL_NEAREST": 9728,
+        "GL_LINEAR": 9729,
+        "GL_NEAREST_MIPMAP_NEAREST": 9784,
+        "GL_LINEAR_MIPMAP_NEAREST": 9785,
+        "GL_NEAREST_MIPMAP_LINEAR": 9786,
+        "GL_LINEAR_MIPMAP_LINEAR": 9787,
+        "GL_CLAMP_TO_EDGE": 33061,
+        "GL_MIRRORED_REPEAT": 33648,
+        "GL_REPEAT": 10497
+    }
+    # Samplers to add from the XML mapped to glTF materials.
+    sampler_table = {
+        "uAlbedoTexture": "pbrMetallicRoughness",
+        "uNormalTexture": "normalTexture",
+        "uMaskTexture": "emissiveTexture",
+        "uAlphaTexture": None  # "occlusionTexture"
+    }
+    # https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#accessor-data-types
+    num_components_to_accessor_types = {
+        1: "SCALAR",
+        2: "VEC2",
+        3: "VEC3",
+        4: "VEC4"
+    }
+    # https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#accessor-data-types
+    vertex_data_type_to_accessor_data_types = {
+        13: 5120,  # EPVRMesh.VertexData.eByte
+        10: 5121,  # EPVRMesh.VertexData.eUnsignedByte
+        11: 5122,  # EPVRMesh.VertexData.eShort
+        3: 5123,   # EPVRMesh.VertexData.eUnsignedShort
+        17: 5125,  # EPVRMesh.VertexData.eUnsignedInt
+        1: 5126    # EPVRMesh.VertexData.eFloat
+    }
 
-  def __init__(self):
-    self.glb = None
-    self.pod = None
-    self.scene = None
-    self.fix_uvs = True
-    
+    def __init__(self):
+        self.glb = None
+        self.pod = None
+        self.scene = None
+        #self.fix_uvs = True
 
-  @classmethod
-  def open(cls, inpath):
-    print("[Part 00] Loading POD...")
-    converter = cls()
-    converter.load(inpath)
-    return converter
+    @classmethod
+    def open(cls, inpath):
+        print("[Part 00] Loading POD...")
+        converter = cls()
+        converter.load(inpath)
+        return converter
 
-  def load(self, inpath):
-    print("[Part 01] Starting up all loaders...") 
-    # create a glb exporter
-    self.glb = GLBExporter()
-    # create a pvr pod parser
-    self.pod = PVRPODLoader.open(inpath)
-    self.scene = self.pod.scene
-    self.convert_meshes()
-    self.convert_nodes()
-    self.convert_textures()
-    self.convert_materials()
+    def load(self, inpath):
+        print("[Part 01] Starting up all loaders...")
+        # create a glb exporter
+        self.glb = GLBExporter()
+        # create a pvr pod parser
+        self.pod = PVRPODLoader.open(inpath)
+        self.scene = self.pod.scene
+        self.convert_meshes()
+        self.convert_nodes()
+        self.add_textures()
+        self.convert_materials()
 
-  def save(self, path):
-    print("[Part 06] Saving all data to a GLB format...")
-    if xmlsupport == True:
-      print('[WARNING] Due to constraints with GLTF, any Mask textures found will be attached as "Emission". It is up to you to reattach and correctly apply this map.')
-    self.glb.save(path)
-    print("[FINISH!] Done!")
+    def save(self, path):
+        print("[Part 06] Saving all data to a GLB format...")
+        if xmlroot is not None:
+            print("[WARNING] Due to constraints with GLTF, any Mask textures found will be attached as \"Emission\". It is up to you to reattach and correctly apply this map.")
+        self.glb.save(path)
+        print("[FINISH!] Done!")
 
-  def findallsamplers(xmlmaterial):
-      samplers = 0
-      for material in xmlmaterial:
-        samp = material.findall("Sampler2D")
-        for sample in samp:
-          samplers = samplers + 1
-      print(f"[DEBUG] Found {samplers} in XML file.")
-      return(samplers)
+    @staticmethod
+    def findallsamplers(xmlmaterial):
+        samplers = 0
+        for material in xmlmaterial:
+            samp = material.findall("Sampler2D")
+            for sample in samp:
+                samplers += 1
+        print(f"[DEBUG] Found {samplers} in XML file.")
+        return samplers
 
-  def convert_textures(self):  
-    alphahotfix = False
-    alphaarray = []
-    diffusearray = []
-    print("[Part 04] Converting textures...")
-    if platform == "Windows":
-      pathforcheck = ((os.path.abspath(os.getcwd())) + "\\PVRTexToolCLI.exe")
-    elif platform == "Darwin":
-      pathforcheck = ((os.path.abspath(os.getcwd())) + "/PVRTexToolCLI")
-    elif platform == "Linux":
-      pathforcheck = ((os.path.abspath(os.getcwd())) + "/PVRTexToolCLI")
-    else:
-      print("UNKNOWN PLATFORM! DEFAULTING TO LINUX...")
-      pathforcheck = ((os.path.abspath(os.getcwd())) + "/PVRTexToolCLI")
-    # Override if user has a file path for PVRTexTool
-    if PVRTEXTOOL != "":
-      print(f"[OVERRIDE] Overriding path for PVRTexTool with {PVRTEXTOOL}")
-      pathforcheck = PVRTEXTOOL
-    print("[DEBUG] Path for PVRTexToolCLI should be in: " + pathforcheck)
-    SANITYCHECK = path.exists(pathforcheck)
-    if xmlsupport == False:
-      for (textureIndex, texture) in enumerate(self.scene.textures):
-        print(f"[Part 04-1] Adding image {texture.getPath()}...")
-        self.glb.addImage({
-          "uri": texture.getPath(dir="", ext=".png")
-        })
-        self.glb.addSampler({
-          "magFilter": 9729,
-          "minFilter": 9987,
-          "wrapS": 10497,
-          "wrapT": 10497
-        })
-        self.glb.addTexture({
-          "name": texture.name,
-          "sampler": textureIndex,
-          "source": textureIndex
-        })
-    else:
-      # Enchanced XML sampler import support
-      xmlmaterials = xmlroot.find("Materials")
-      xmlmaterial = xmlmaterials.findall('Material')
-      textureIndex = 0
-      for material in xmlmaterial:
-        for sampler in material.findall('Sampler2D'):
-          magFilter = 9729
-          minFilter = 9987
-          wrapS = 10497
-          wrapT = 10497
-          texture = {
-            "path": str((sampler.find("FileName")).text).replace(".tga",".png"),
-            "name": str(sampler.attrib['Name'])
-          }
-          mag = sampler.find("GL_TEXTURE_MAG_FILTER")
-          min = sampler.find("GL_TEXTURE_MIN_FILTER")
-          S = sampler.find("GL_TEXTURE_WRAP_S")
-          T = sampler.find("GL_TEXTURE_WRAP_T")
-
-          # If statement hell for deciding which stuff is which.
-
-          # Magnification filter
-          if mag.text == "GL_NEAREST":
-            magFilter = 9728
-          elif mag.text == "GL_LINEAR":
-            magFilter = 9729
-
-          # Minification filter
-          if min.text == "GL_NEAREST":
-            minFilter = 9728
-          elif min.text == "GL_LINEAR":
-            minFilter = 9729
-          elif min.text == "GL_NEAREST_MIPMAP_NEAREST":
-            minFilter = 9784
-          elif min.text == "GL_LINEAR_MIPMAP_NEAREST":
-            minFilter = 9785
-          elif min.text == "GL_NEAREST_MIPMAP_LINEAR":
-            minFilter = 9786
-          elif min.text == "GL_LINEAR_MIPMAP_LINEAR":
-            minFilter = 9787
-
-          # S (U) Wrapping Mode
-          if S.text == "GL_CLAMP_TO_EDGE":
-            wrapS = 33061
-          elif S.text == "GL_MIRRORED_REPEAT":
-            wrapS = 33648
-          elif S.text == "GL_REPEAT":
-            wrapS = 10947
-
-          # T (V) Wrapping Mode
-          if T.text == "GL_CLAMP_TO_EDGE":
-            wrapT = 33061
-          elif T.text == "GL_MIRRORED_REPEAT":
-            wrapT = 33648
-          elif T.text == "GL_REPEAT":
-            wrapT = 10947
-
-          print(f"[Part 04-1] Adding image {texture['name']}, path {texture['path']}...")
-          self.glb.addImage({
-            "uri": texture['path']
-          })
-          self.glb.addSampler({
-            "magFilter": magFilter,
-            "minFilter": minFilter,
-            "wrapS": wrapS,
-            "wrapT": wrapT
-          })
-          self.glb.addTexture({
-            "name": texture["name"],
-            "sampler": textureIndex,
-            "source": textureIndex
-          })
-          textureIndex = textureIndex + 1
-          if texture["name"] == "uAlbedoTexture":
-            diffusearray.append(os.path.join(os.path.dirname(pathout), os.path.basename(texture['path'])))
-            print("[DEBUG] Diffuse Map found.")
-          elif texture["name"] == "uAlphaTexture":
-            alphaarray.append(os.path.join(os.path.dirname(pathout), os.path.basename(texture['path'])))
-            alphahotfix = True
-            print("[DEBUG] Alpha Map found.")
-
-
-    if SANITYCHECK == True:
-      print("[Part 04-2] Now converting all images!")
-      tobeconvert = []
-      for root, dirs, files in os.walk(os.path.dirname(pathto)):
-        for pvr in files:
-          if str(pvr).endswith(".pvr"):
-            output = os.path.join(os.path.dirname(pathout), os.path.basename(os.path.splitext(pvr)[0]+".png"))
-            print(f"[Part 04-2] Converting {pvr} to png...")
-            print(f"[DEBUG] Will be saved at {output}")
-            sp.call([
-              pathforcheck,
-              "-d", output,
-              "-i", os.path.join(root, pvr)
-            ])
-            print("[HOTFIX] PVRTexTool for some reason generates a _Out file, so automatically deleting that.")
-            os.remove(os.path.join(root, os.path.splitext(pvr)[0]+"_Out.pvr"))
-      if alphahotfix == True:
-        print("[HOTFIX] Due to contraints with GLTF files, alpha maps will be inserted into the diffuse map.")
-        for diffusemap in diffusearray:
-          for comalpha in range(len(diffusearray)):
-            diffusepath = diffusemap
-            try:
-              alphamap = PIL.Image.open(alphaarray[comalpha]).convert("L")
-              diffusemap = PIL.Image.open(diffusemap).convert("RGB")
-
-              dw, dh = diffusemap.size
-              alpharesize = (dw, dh)
-              alphamap.resize(alpharesize)
-              diffusemap.putalpha(alphamap)
-              diffusemap.save(diffusepath)
-            except FileNotFoundError:
-              print("[DEBUG] Not applying non-exsistent alpha.")
-
-
-    else:
-        print("[Part 04-2 - WARNING!] Textures will be added, but not converted. You don't have PVRTexToolCLI downloaded or didn't put it in the same directory as the converter (Or you misspelled string inside the PVRTEXTOOL variable if you tried to override the paths!). To download it, go to https://developer.imaginationtech.com/solutions/pvrtextool/. If you have downloaded, move PVRTexToolCLI in the same directory as this script! The usual path (for Windows) is C:\\Imagination Technologies\\PowerVR_Graphics\\PowerVR_Tools\\PVRTexTool\\CLI\\Windows_x86_64.")
-  
-  def convert_materials(self):
-    print("[Part 05] Converting materials...")
-    if xmlsupport == False:
-      for (materialIndex, material) in enumerate(self.scene.materials):
-        if material.diffuseTextureIndex > -1:
-          pbr = {
-            "baseColorTexture": {
-              "index": material.diffuseTextureIndex,
-            },
-            "roughnessFactor": 1 - material.shininess,
-          }
-        else: 
-          pbr = {
-            "baseColorFactor": material.diffuse.tolist() + [1],
-            "roughnessFactor": 1 - material.shininess,
-          }
-        if material.bumpMapTextureIndex > -1:
-          normal = {
-            "index": material.bumpMapTextureIndex
-          }
-        else:
-          normal = {}
-        if material.opacityTextureIndex > -1:
-          Alpha = {
-            "index": material.bumpMapTextureIndex
-          }
-        else:
-          Alpha = {}
-
-        self.glb.addMaterial({
-          "name": material.name,
-          "pbrMetallicRoughness": pbr,
-          "normalTexture": normal,
-          "occlusionTexture": Alpha
-        })
-    else:
-      xmlmaterials = xmlroot.find("Materials")
-      xmlmaterial = xmlmaterials.findall('Material')
-      textureIndex = 0
-      for (materialIndex, material) in enumerate(self.scene.materials):
-        # Settings to list which option is available
-        hasAlpha = False
-        # Makes texture visible
-        Albedo = {
-          "baseColorTexture": {},
-          "roughnessFactor": 1 - material.shininess
+    @staticmethod
+    def texture_from_sampler(sampler):
+        name = str(sampler.attrib["Name"])
+        filename = sampler.find("FileName").text
+        if filename is None:
+            print(f"[DEBUG] Texture {name} does not have a filename, marking as unused.")
+            return None  # Texture is not used.
+        # Replace .tga with .png: vv
+        path = str(filename).replace(".tga", ".png")
+        texture = {
+            "path": path,
+            "name": name
         }
-        Normal = {}
-        Mask = {}
-        Alpha = {}
-        for xmmaterial in xmlmaterial:
-          print(f"[DEBUG] Material from POD Name is {material.name}")
-          print(f"[DEBUG] Material from XML is called {xmmaterial.attrib['Name']}")
-          if str(material.name) == xmmaterial.attrib['Name']:
-            for sampler in xmmaterial.findall('Sampler2D'):
-              if sampler.attrib['Name'] == 'uAlbedoTexture':
-                Albedo["baseColorTexture"] = {"index": int(textureIndex)}
-                if sampler.find("UVIdx") is not None:
-                  Albedo["texCoord"] = int((sampler.find("UVIdx")).text)
-                textureIndex = textureIndex + 1
-                print("[DEBUG] Has albedo texture!")
+        return texture
 
-              elif sampler.attrib['Name'] == 'uNormalTexture':
-                hasNormal = True
-                Normal["index"] = int(textureIndex)
-                if sampler.find("UVIdx") is not None:
-                  Normal["texCoord"] = int((sampler.find("UVIdx")).text)
+    @staticmethod
+    # Returns either the path or False if it does not exist:
+    def get_pvrtextool_path_and_exists():
+        slash = "\\" if platform == "Windows" else "/"
+        suffix = ".exe" if platform == "Windows" else ""
+        pvrtextool_path = f"{os.path.abspath(os.getcwd())}{slash}PVRTexToolCLI{suffix}"
+        # Override if user has a file path for PVRTexTool
+        overridden_text = ""
+        if PVR_TEX_TOOL_PATH != "":
+            overridden_text = "(OVERRIDDEN!) "
+            pvrtextool_path = PVR_TEX_TOOL_PATH
+        print(f"[DEBUG] Path for PVRTexToolCLI {overridden_text}is: {pvrtextool_path}")
+        pvrtextool_exists = path.exists(pvrtextool_path)
+        ret = False if not pvrtextool_exists else pvrtextool_path
+        return ret
+
+    @staticmethod
+    def convert_texture_single(tool_path, input_file, output):
+        print(f"[DEBUG] Running PVRTexTool. Will be saved at {output}")
+        sp.run([
+            tool_path,
+            "-d", output,
+            "-i", input_file
+        ], check=True)  # Tool will output to console.
+
+        pvr_out_fname = f"{os.path.splitext(input_file)[0]}_Out.pvr"
+        print(f"[HOTFIX] Deleting temporary PVRTexTool _Out file if it exists: {pvr_out_fname}")
+        try:
+            pvr_out_path = os.path.join(os.path.dirname(input_file), pvr_out_fname)
+            os.remove(pvr_out_path)
+        except FileNotFoundError:  # Ignore if that _Out file doesn't exist.
+            pass
+
+    def add_textures_no_conversion(self):
+        for (textureIndex, texture) in enumerate(self.scene.textures):
+            print(f"[Part 04-1] Adding image {texture.getPath()}...")
+
+            self.glb.addImage({
+                "uri": texture.getPath(dir="", ext=".png")
+            })
+            self.glb.addSampler({
+                "magFilter": self.GLENUM["GL_LINEAR"],
+                "minFilter": self.GLENUM["GL_LINEAR"],
+                "wrapS": self.GLENUM["GL_REPEAT"],
+                "wrapT": self.GLENUM["GL_REPEAT"]
+            })
+            self.glb.addTexture({
+                "name": texture.name,
+                "sampler": textureIndex,
+                "source": textureIndex
+            })
+
+    def convert_textures(self, alphaarray=[], diffusearray=[]):
+        if xmlroot is None:
+            # Assumes all textures are in current directory.
+            return self.add_textures_no_conversion()
+        print("[Part 04] Converting textures...")
+
+        pvrtextool_path = self.get_pvrtextool_path_and_exists()
+        if pvrtextool_path:  # Is PVRTexTool available?
+            dir_of_input = os.path.dirname(pathto)
+            print("[Part 04-2] Now converting all images. Walking path:")
+
+            for root, dirs, files in os.walk(dir_of_input):
+                for file in files:
+                    if not str(file).endswith(".pvr"):
+                        continue  # Skip all non-pvr files.
+                    # Input is a pvr file:
+                    output = os.path.join(os.path.dirname(pathout), os.path.basename(f"{os.path.splitext(file)[0]}.png"))
+                    print(f"[Part 04-2] Converting {file} to png...")
+                    input_file = os.path.join(root, file)
+                    self.convert_texture_single(pvrtextool_path, input_file, output)
+
+            # Apply alpha maps.
+            if not diffusearray:  # array is empty?
+                return  # assuming we have nothing else to do
+            print("[HOTFIX] Now merging alpha maps with albedo textures.")
+            for diffusemap in diffusearray:
+                for comalpha in range(len(diffusearray)):
+                    diffusepath = diffusemap
+                    if diffusepath is None or comalpha >= len(alphaarray):
+                        print("[DEBUG] Skipping alpha maps.")
+                        continue
+                    try:
+                        alphamap = PIL.Image.open(alphaarray[comalpha]).convert("L")
+                        diffusemap = PIL.Image.open(diffusemap).convert("RGB")
+
+                        dw, dh = diffusemap.size
+                        alpharesize = (dw, dh)
+                        alphamap.resize(alpharesize)
+                        diffusemap.putalpha(alphamap)
+                        diffusemap.save(diffusepath)
+                        print("[DEBUG] Applied alpha map to diffuse map and re-saved.")
+                    except FileNotFoundError as e:
+                        print(f"[DEBUG] Caught: {e}. Not applying non-existent alpha.")
+
+        else:  # not pvrtextool_path
+            print("[Part 04-2 - WARNING!] Textures will be added, but not converted (pvrtextool_path == False). You don't have PVRTexToolCLI downloaded or didn't put it in the same directory as the converter (Or you misspelled string inside the PVRTEXTOOL variable if you tried to override the paths!). To download it, go to https://developer.imaginationtech.com/solutions/pvrtextool/. If you have downloaded, move PVRTexToolCLI in the same directory as this script! The usual path (for Windows) is C:\\Imagination Technologies\\PowerVR_Graphics\\PowerVR_Tools\\PVRTexTool\\CLI\\Windows_x86_64.")
+
+    def add_textures(self):
+        if xmlroot is None:  # Take non-XML path.
+            return self.add_textures_no_conversion()
+        # Enchanced XML sampler import support
+        xmlmaterials = xmlroot.find("Materials")
+        xmlmaterial = xmlmaterials.findall("Material")
+        textureIndex = 0
+
+        # Albedo textures that need conversion:
+        diffusearray = []  # Initialize and fill later: vv
+        # Alpha maps to apply to them:
+        alphaarray = []
+
+        for material in xmlmaterial:
+            # Iterate through all samplers to find
+            # uAlbedoTexture/uAlphaTexture.
+            for sampler in material.findall("Sampler2D"):
+                texture = self.texture_from_sampler(sampler)
+                if texture is None:
+                    continue
+                path = os.path.basename(texture["path"])
+                abspath = os.path.join(os.path.dirname(pathout), path)
+
+                if texture["name"] == "uAlbedoTexture":
+                    diffusearray.append(abspath)
+                    print("[DEBUG] Diffuse Map found.")
+                elif texture["name"] == "uAlphaTexture":
+                    alphaarray.append(abspath)
+                    print("[DEBUG] Alpha Map found.")
+
+        # Convert textures here.
+        self.convert_textures(alphaarray, diffusearray)
+        # Pass again to add textures.
+        for material in xmlmaterial:
+            for sampler in material.findall("Sampler2D"):
+                texture = self.texture_from_sampler(sampler)
+                if texture is None:
+                    continue
+                if texture["name"] not in self.sampler_table.keys():
+                    print(f"[DEBUG] Skipping image {texture["name"]} since it is not in sampler_table and will not be added as a sampler either.")
+                    continue
+
+                mag = sampler.find("GL_TEXTURE_MAG_FILTER")
+                min = sampler.find("GL_TEXTURE_MIN_FILTER")
+                S = sampler.find("GL_TEXTURE_WRAP_S")
+                T = sampler.find("GL_TEXTURE_WRAP_T")
+
+                magFilter = self.GLENUM.get(mag.text, self.GLENUM["GL_LINEAR"])  # Magnificiation filter
+                minFilter = self.GLENUM.get(min.text, self.GLENUM["GL_LINEAR"])  # Minification filter
+                wrapS = self.GLENUM.get(S.text, self.GLENUM["GL_REPEAT"])  # S (U) Wrapping Mode
+                wrapT = self.GLENUM.get(T.text, self.GLENUM["GL_REPEAT"])  # T (V) Wrapping Mode
+
+                print(f"[Part 04-1] Adding image {texture["name"]}, path {texture["path"]}...")
+
+                if embedimage:
+                    with open(texture["path"], "rb") as img_file:
+                        image_data = img_file.read()
+                    # Create a buffer view for the image
+                    buffer_view_index = self.glb.addBufferView({
+                        "buffer": 0,
+                        "byteOffset": self.glb.addData(image_data),  # buffer offset
+                        "byteLength": len(image_data)
+                    })
+                    print(f"[DEBUG] Read image in, adding as buffer view index {buffer_view_index}")
+                    # Add the image with bufferView and MIME type
+                    self.glb.addImage({
+                        "bufferView": buffer_view_index,
+                        "mimeType": "image/png",
+                        "name": os.path.basename(texture["path"]),
+                        #"uri": texture["path"]
+                    })
+                else:  # Just use a link to the local image.
+                    self.glb.addImage({
+                        "uri": texture["path"]
+                    })
+
+                self.glb.addSampler({
+                    "magFilter": magFilter,
+                    "minFilter": minFilter,
+                    "wrapS": wrapS,
+                    "wrapT": wrapT
+                })
+                self.glb.addTexture({
+                    "name": texture["name"],
+                    "sampler": textureIndex,
+                    "source": textureIndex
+                })
                 textureIndex += 1
-                print("[DEBUG] Has normal texture!")
 
-              elif sampler.attrib['Name'] == 'uMaskTexture':
-                hasMask = True
-                Mask["index"] = int(textureIndex)
-                if sampler.find("UVIdx") is not None:
-                  Mask["texCoord"] = int((sampler.find("UVIdx")).text)
-                textureIndex += 1
-                print("[DEBUG] Has mask texture!")
-
-              elif sampler.attrib['Name'] == 'uAlphaTexture':
-                hasAlpha =True
-
-                # Old alpha code.
-
-                #Alpha["index"] = int(textureIndex)
-                #if sampler.find("UVIdx") is not None:
-                #  Alpha["texCoord"] = int((sampler.find("UVIdx")).text)
-                textureIndex += 1
-                print("[DEBUG] Has alpha support!")
-    
-            print(f"[Part 05-1] Adding material {material.name}...")
-
-            PODMaterial = {
-              "name": material.name,
-              "pbrMetallicRoughness": Albedo,
-              "normalTexture": Normal,
-              "emissiveTexture": Mask,
-              "doubleSided": True,
+    def convert_materials(self):
+        print("[Part 05] Converting materials...")
+        if xmlroot is not None:
+            return self.convert_materials_with_xml()
+        # Standard non-XML path.
+        for (materialIndex, material) in enumerate(self.scene.materials):
+            materialGLB = {
+                "name": material.name,
             }
-            
-            if hasAlpha == True:
-              # Old code.
-              #PODMaterial["occlusionTexture"] = Alpha
-              PODMaterial["alphaMode"] = "BLEND"
-            
-            if xmmaterial.find("Culling") is not None:
-              if xmmaterial.find("Culling").text == 'None':
-                print(f"[DEBUG] Material {material.name} does NOT have backface culling on.")
-              else:
-                PODMaterial["doubleSided"] == False
-                print(f"[DEBUG] Material {material.name} has backface culling on.")
+            if material.diffuseTextureIndex > -1:
+                materialGLB["pbrMetallicRoughness"] = {
+                    "baseColorTexture": {
+                        "index": material.diffuseTextureIndex,
+                    },
+                    "roughnessFactor": 1 - material.shininess,
+                }
+            else:
+                materialGLB["pbrMetallicRoughness"] = {
+                    "baseColorFactor": material.diffuse.tolist() + [1],
+                    "roughnessFactor": 1 - material.shininess,
+                }
+            if material.bumpMapTextureIndex > -1:
+                materialGLB["normalTexture"] = {
+                    "index": material.bumpMapTextureIndex
+                }
+            if material.opacityTextureIndex > -1:
+                materialGLB["occlusionTexture"] = {
+                    "index": material.bumpMapTextureIndex
+                }
 
-            self.glb.addMaterial(PODMaterial)
-          else:
-            print(f"[DEBUG] Material is not the same! {xmmaterial.attrib['Name']} is not the same as {material.name}")
+            self.glb.addMaterial(materialGLB)
 
-  def convert_nodes(self):
-    print("[Part 03] Converting nodes...")
-    for (nodeIndex, node) in enumerate(self.scene.nodes):
+    def convert_materials_with_xml(self):
+        xmlmaterials = xmlroot.find("Materials")
+        xmlmaterial = xmlmaterials.findall("Material")
+        textureIndex = 0
+        for (materialIndex, material) in enumerate(self.scene.materials):
+            # Settings to list which option is available
+            for materialkeys in xmlmaterial:
+                print(f"[DEBUG] Material from POD Name is {material.name}, from XML: {materialkeys.attrib["Name"]}")
+                if str(material.name) != materialkeys.attrib["Name"]:
+                    #print(f"[DEBUG] Material is not the same! {materialkeys.attrib["Name"]} is not the same as {material.name}")
+                    continue
 
-      nodeEntry = {
-        "name": node.name,
-        "children": [i for (i, node) in enumerate(self.scene.nodes) if node.parentIndex == nodeIndex],
-        "translation": node.animation.positions.tolist(),
-        "scale": node.animation.scales[0:3].tolist(),
-        "rotation": node.animation.rotations[0:4].tolist(),
-      }
-    
-      
-      # if the node has a mesh index
-      if node.index != -1:
-        print(f"[Part 03-1] {node.name} has a mesh index.")
-        meshIndex = node.index
-        nodeEntry["mesh"] = meshIndex
-        if node.materialIndex != -1:
-          self.glb.meshes[meshIndex]["primitives"][0]["material"] = node.materialIndex
+                print(f"[Part 05-1] Adding material {material.name}...")
 
-      # if the node index is -1 it is a root node
-      if node.parentIndex == -1:
-        print(f"[Part 03-1] {node.name} is a root node.")
-        self.glb.addRootNodeIndex(nodeIndex)
-      print(f"[Part 03-2] Now adding {node.name}.")
-      self.glb.addNode(nodeEntry)
-      # To convert or not to convert
-      if node.animation.matrices != None:
-        print(f"Converting matrix animation data for: {node.name}")
-        print("Currently animation porting is not available at this time, sorry :(")
-        # keyframes = []
-        # matrix = node.animation.matrices.tolist()
-        # for x in range(len(matrix)):
-        #   if x != 15 or:
-        #    rotationX = PVRMaths.PVRMatrix4x4RX3D()
+                cull_mode_to_double_sided = {
+                    "None": True,
+                    "Back": False,
+                    "Front": False
+                    # NOTE: Front is NOT supported in glTF.
+                    # Also rare (headwear0063). Triangle windings
+                    # need to be flipped in the index
+                    # buffer in order to simulate this.
+                }
+                culling_key = materialkeys.find("Culling")
+                if culling_key == "Front":
+                    print("[WARNING] Culling is set to Front. This is not supported.")
+                # Double sided as false by default.
+                double_sided = cull_mode_to_double_sided.get(culling_key, False)
+                print(f"[DEBUG] Material {material.name} {"does NOT have" if double_sided else "has"} backface culling on.")
 
-  
-  def convert_meshes(self):
-    print("[Part 02] Converting meshes...")
-    for (meshIndex, mesh) in enumerate(self.scene.meshes):
-      attributes = {}
-      numFaces = mesh.primitiveData["numFaces"]
-      numVertices = mesh.primitiveData["numVertices"]
+                PODMaterial = {
+                    "name": material.name,
+                    # Albedo/uAlbedoTexture
+                    "pbrMetallicRoughness": {  # Makes texture visible
+                        "baseColorTexture": {},
+                        "roughnessFactor": 1 - material.shininess
+                    },
+                    # uNormalTexture
+                    "normalTexture": {},
+                    # uMaskTexture
+                    "emissiveTexture": {},
+                }
+                if double_sided:
+                    PODMaterial["doubleSided"] = double_sided
 
-      # face index buffer view
-      indices = mesh.faces["data"]
-      indicesAccessorIndex = self.glb.addAccessor({
-        "bufferView": self.glb.addBufferView({
-          "buffer": 0,
-          "byteOffset": self.glb.addData(indices.tobytes()),
-          "byteLength": len(indices) * indices.itemsize,
-          "target": 34963
-        }),
-        "byteOffset": 0,
-        # https://github.com/KhronosGroup/glTF/blob/master/specification/2.0/README.md#accessor-element-size
-        "componentType": 5123,
-        "count": numFaces * 3,
-        "type": "SCALAR"
-      })
+                for sampler in materialkeys.findall("Sampler2D"):
+                    if "Name" not in sampler.attrib:
+                        continue
+                    name = sampler.attrib["Name"]
+                    material_tex_name = self.sampler_table.get(name, None)
+                    if material_tex_name is not None:
+                        print(f"[DEBUG] Has sampler {name}!")
+                        # glTF validator: Unexpected property. vv
+                        if sampler.find("UVIdx") is not None:
+                            PODMaterial[material_tex_name]["texCoord"] = int((sampler.find("UVIdx")).text)
 
-      # vertex buffer view
-      vertexElements = mesh.vertexElements
+                        # uAlbedoTexture:
+                        if material_tex_name == "pbrMetallicRoughness":
+                            PODMaterial[material_tex_name]["baseColorTexture"] = {"index": int(textureIndex)}
+                        else:
+                            PODMaterial[material_tex_name]["index"] = int(textureIndex)
+                        textureIndex += 1
 
+                # Set alphaMode to BLEND if IsXlu is enabled.
+                for isxlu in materialkeys.findall('IsXlu'):
+                    if isxlu.text == 'true':
+                        PODMaterial["alphaMode"] = "BLEND"
 
+                self.glb.addMaterial(PODMaterial)
 
+    def convert_nodes(self):
+        print("[Part 03] Converting nodes...")
+        for (nodeIndex, node) in enumerate(self.scene.nodes):
+            children = [i for (i, node) in enumerate(self.scene.nodes) if node.parentIndex == nodeIndex]
 
-      vertexBufferView = self.glb.addBufferView({
-        "buffer": 0,
-        "byteOffset": self.glb.addData(mesh.vertexElementData[0]),
-        "byteStride": vertexElements["POSITION"]["stride"],
-        "byteLength": len(mesh.vertexElementData[0]),
-      })
+            nodeEntry = {
+                "name": node.name,
+                "translation": node.animation.positions.tolist(),
+                "scale": node.animation.scales[0:3].tolist(),
+                "rotation": node.animation.rotations[0:4].tolist(),
+            }
 
-      for name in vertexElements:
-        element = vertexElements[name]
-        componentType = 5126
-        type = "VEC3"
-        
-        if name == "TEXCOORD_0":
-          type = "VEC2"
-        
-        elif name == "COLOR_0": # not implemented
-          continue
+            if children:  # skip if it is empty array
+                nodeEntry["children"] = children
 
-        accessorIndex = self.glb.addAccessor({
-          "bufferView": vertexBufferView,
-          "byteOffset": element["offset"],
-          # https://github.com/KhronosGroup/glTF/blob/master/specification/2.0/README.md#accessor-element-size
-          "componentType": componentType,
-          "count": numVertices,
-          "type": type
-        })
-        attributes[name] = accessorIndex
+            # if the node has a mesh index
+            if node.index != -1:
+                print(f"[Part 03-1] {node.name} has a mesh index.")
+                meshIndex = node.index
+                nodeEntry["mesh"] = meshIndex
+                if node.materialIndex != -1:
+                    self.glb.meshes[meshIndex]["primitives"][0]["material"] = node.materialIndex
 
-      # POD meshes only have one primitive?
-      # https://github.com/KhronosGroup/glTF/blob/master/specification/2.0/README.md#primitive
-      print("[Part 02-1] Adding mesh...")
-      self.glb.addMesh({
-        "primitives": [{
-          "attributes": attributes,
-          "indices": indicesAccessorIndex,
-          "mode": 4,
-        }],
-      })
+            # if the node index is -1 it is a root node
+            if node.parentIndex == -1:
+                print(f"[Part 03-1] {node.name} is a root node.")
+                self.glb.addRootNodeIndex(nodeIndex)
+            print(f"[Part 03-2] Now adding {node.name}.")
+            self.glb.addNode(nodeEntry)
+            # To convert or not to convert
+            if node.animation.matrices is not None:
+                print(f"Converting matrix animation data for: {node.name}")
+                print("Currently animation porting is not available at this time, sorry :(")
+                print(node.animation.matrices)
+                # keyframes = []
+                # matrix = node.animation.matrices.tolist()
+                # for x in range(len(matrix)):
+                #     if x != 15 or:
+                #        rotationX = PVRMaths.PVRMatrix4x4RX3D()
 
-def NoesisStuff(file, pathforcheck):
-  print("Using Noesis to convert to FBX as a way to fix it mainly because I'm lazy")
-  if platform == "Windows":
-    print("[FIX 01] Platform is Windows/MS-DOS, running Noesis natively")
-    sp.call([
-      pathforcheck,
-      "?cmode",
-      file,
-      os.path.basename(os.path.splitext(file)[0]+".fbx")
-    ])
-  elif platform == "Darwin":
-    print("[FIX 01] Platform is UNIX-based, trying to use Wine to run Noesis (Note: This is for macOS - No idea if wine would be in PATH)")
-    sp.call([
-      "wine " + pathforcheck,
-      "?cmode",
-      file,
-      os.path.basename(os.path.splitext(file)[0]+".fbx")
-    ])
-  elif platform == "Linux":
-    print("[FIX 01] Platform is UNIX-based, trying to use Wine to run Noesis (Linux)")
-    sp.call([
-      "wine " + pathforcheck,
-      "?cmode",
-      file,
-      os.path.basename(os.path.splitext(file)[0]+".fbx")
-    ])
-  else:
-    print("[FIX 01] Platform is unknown, trying to use Wine to run Noesis")
-    sp.call([
-      "wine " + pathforcheck,
-      "?cmode",
-      file,
-      os.path.basename(os.path.splitext(file)[0]+".fbx")
-    ])
-  print("[FIX - FINISH!] Should generate a FBX file - use that instead of the GLB file.")
-  FIX_COMPLETED = True
-def NoesisFix(file):
-  print("[FIX 00] Trying to convert the GLB to FBX because Blender doesn't understand the armature this tool generates.")
-  # Check if 64-bit version is available
-  if platform == "Windows":
-    pathforcheck = ((os.path.abspath(os.getcwd())) + "\\Noesis64.exe")
-  elif platform == "Darwin":
-    pathforcheck = ((os.path.abspath(os.getcwd())) + "/Noesis64.exe")
-  elif platform == "Linux":
-    pathforcheck = ((os.path.abspath(os.getcwd())) + "/Noesis64.exe")
-  else:
-    print("[FIX 00 - WARNING] UNKNOWN PLATFORM! DEFAULTING TO UNIX...")
-    pathforcheck = ((os.path.abspath(os.getcwd())) + "/Noesis64.exe")
+    def convert_meshes(self):
+        print("[Part 02] Converting meshes...")
+        for (meshIndex, mesh) in enumerate(self.scene.meshes):
+            attributes = {}
+            numFaces = mesh.primitiveData["numFaces"]
+            numVertices = mesh.primitiveData["numVertices"]
 
-  print("[DEBUG] Path for Noesis should be in: " + pathforcheck)
-  SANITYCHECK = path.exists(pathforcheck)
-  if SANITYCHECK == True:
-    NoesisStuff(file, pathforcheck)
-  else:
-    print("[DEBUG] 64-bit version NOT detected.")
-  if FIX_COMPLETED == True:
+            # face index buffer view
+            indices = mesh.faces["data"]
+            indicesAccessorIndex = self.glb.addAccessor({
+                "bufferView": self.glb.addBufferView({
+                    "buffer": 0,
+                    "byteOffset": self.glb.addData(indices.tobytes()),
+                    "byteLength": len(indices) * indices.itemsize,
+                    "target": 34963     # ELEMENT_ARRAY_BUFFER
+                }),
+                "byteOffset": 0,
+                # https://github.com/KhronosGroup/glTF/blob/master/specification/2.0/README.md#accessor-element-size
+                "componentType": 5123,  # UNSIGNED_SHORT
+                "count": numFaces * 3,
+                "type": "SCALAR"
+            })
+
+            # vertex buffer view
+            vertexElements = mesh.vertexElements
+
+            # NOTE: Assuming that it's all in one vertex buffer...!!!
+            vertexBufferView = self.glb.addBufferView({
+                "buffer": 0,
+                "byteOffset": self.glb.addData(mesh.vertexElementData[0]),
+                "byteStride": vertexElements["POSITION"]["stride"],
+                "target": 34962,  # ARRAY_BUFFER
+                "byteLength": len(mesh.vertexElementData[0]),
+            })
+            print(f"[DEBUG] Creating bufferView for mesh {meshIndex}, length: {len(mesh.vertexElementData[0])}")
+
+            for name in vertexElements:
+                if name == "COLOR_0":
+                    # COLOR_0 is is R8G8B8A8_UNORM
+                    # it is not 4 floats, so adding it
+                    # will not work and cause "accessor
+                    # does not fit referenced bufferView..."
+                    print("[DEBUG] Model has COLOR_0 attribute. This is not supported, so it will be skipped.")
+                    continue
+
+                element = vertexElements[name]
+                accessorType = self.num_components_to_accessor_types \
+                    .get(element["numComponents"], None)
+                if accessorType is None:
+                    raise NotImplementedError(f"Don't have glTF accessor data type for number of components: {element["numComponents"]}")
+
+                componentType = self.vertex_data_type_to_accessor_data_types \
+                    .get(element["dataType"], None)
+
+                if componentType is None:
+                    raise NotImplementedError(f"Don't have glTF accessor type for corresponding EPVR vertex data type: {element["dataType"]}")
+
+                accessor_data = {
+                    "bufferView": vertexBufferView,
+                    "byteOffset": element["offset"],
+                    # https://github.com/KhronosGroup/glTF/blob/master/specification/2.0/README.md#accessor-element-size
+                    "componentType": componentType,
+                    "count": numVertices,
+                    "type": accessorType
+                }
+
+                # Make bounding box for position.
+                if name == "POSITION" and hasnumpy:
+                    # Import single vertex buffer.
+                    data = np.frombuffer(mesh.vertexElementData[0], dtype=np.float32)
+                    # 4 = sizeof(float)
+                    stride = int(vertexElements["POSITION"]["stride"] / 4)
+                    assert data.size % stride == 0, "oh no! the data is not divisible by the stride... did we assume "
+                    # Reshape into (-1, stride) to process the interleaved data
+                    data = data.reshape(-1, stride)
+                    positions = data[:, :3]
+
+                    # get min and max, convert np.array
+                    # float32 to list of floats
+                    accessor_data["min"] = [float(x) for x in positions.min(axis=0)]
+                    accessor_data["max"] = [float(x) for x in positions.max(axis=0)]
+
+                accessorIndex = self.glb.addAccessor(accessor_data)
+                print(f"[DEBUG] Creating accessor {accessorIndex} for attribute {name}")
+                attributes[name] = accessorIndex
+
+            # POD meshes only have one primitive?
+            # https://github.com/KhronosGroup/glTF/blob/master/specification/2.0/README.md#primitive
+            print("[Part 02-1] Adding mesh...")
+            self.glb.addMesh({
+                "primitives": [{
+                    "attributes": attributes,
+                    "indices": indicesAccessorIndex,
+                    "mode": 4,  # triangles
+                }],
+            })
+
+def run_noesis_conversion(file, noesis_path):
+    print("Using Noesis to convert to FBX as a way to fix it mainly because I'm lazy. Running now")
+    out_file = os.path.basename(f"{os.path.splitext(file)[0]}.fbx")
+    noesis_command = [noesis_path, "?cmode", file, out_file]
+    if platform != "Windows":
+        noesis_command = ["wine"] + noesis_command
+        print("[FIX 01] Trying to use Wine to run Noesis")
+    sp.run(noesis_command, check=True)
+    print("[FIX - FINISH!] Should generate a FBX file - use that instead of the GLB file.")
+    global FBX_CONV_COMPLETED
+    FBX_CONV_COMPLETED = True
+
+def convert_to_fbx(file):  # Using Noesis/--fix-armature
+    print("[FIX 00] Trying to convert the GLB to FBX because Blender doesn't understand the armature this tool generates.")
+    # Check if 64-bit version is available
+    slash = "\\" if platform == "Windows" else "/"
+    noesis_path = f"{os.path.abspath(os.getcwd())}{slash}Noesis64.exe"
+
+    print(f"[DEBUG] Path for Noesis should be: {noesis_path}")
+    if path.exists(noesis_path):
+        run_noesis_conversion(file, noesis_path)
+        return  # Finish and do not go further.
+    # not noesis_exists:
+    print("[DEBUG] 64-bit version NOT found. Trying 32-bit/override path.")
+
     # Check if 32-bit version is available
-    if platform == "Windows":
-      pathforcheck = ((os.path.abspath(os.getcwd())) + "\\Noesis.exe")
-    elif platform == "Darwin":
-      pathforcheck = ((os.path.abspath(os.getcwd())) + "/Noesis.exe")
-    elif platform == "Linux":
-      pathforcheck = ((os.path.abspath(os.getcwd())) + "/Noesis.exe")
+    noesis_path = f"{os.path.abspath(os.getcwd())}{slash}Noesis.exe"
+    # Override if user has a path set for Noesis.
+    if NOESIS_PATH != "":
+        print(f"[OVERRIDE] Overriding path for Noesis with {NOESIS_PATH}")
+        noesis_path = NOESIS_PATH
+    print(f"[DEBUG] Trying Noesis path: {noesis_path}")
+    if path.exists(noesis_path):
+        run_noesis_conversion(file, noesis_path)
     else:
-      pathforcheck = ((os.path.abspath(os.getcwd())) + "/Noesis.exe")
-    
-    # Override if user has a file path for Noesis
+        print("[FIX - ERROR!] Fix will NOT continue. You don't have Noesis downloaded or didn't put it in the same directory as the converter (Or you misspelled the NOESIS_PATH variable if you tried to override the paths!). To download it, go to https://www.richwhitehouse.com/index.php?content=inc_projects.php&showproject=91.")
 
-      if NOESIS != "":
-        print(f"[OVERRIDE] Overriding path for Noesis with {NOESIS}")
-        pathforcheck = NOESIS
-    print("[DEBUG] Path for Noesis should be in: " + pathforcheck)
-    if SANITYCHECK == True:
-      NoesisStuff(file, pathforcheck)
+def main():
+    # Create argparse instance and add arguments.
+    parser = argparse.ArgumentParser(description="Converts POD models from Miitomo to glTF (.glb) format.")
+
+    # Add positional arguments.
+    parser.add_argument("pod_path", type=str, help="Path to the input POD file. The XML and textures are expected to be relative to this.")
+    parser.add_argument("glb_path", type=str, help="Path to the output glTF model/.glb file.")
+
+    # Optional flag to fix armature/convert to FBX.
+    parser.add_argument("-f", "--fix-armature", action="store_true", help="Tries to fix Blender quirks with GLB files by converting it to a FBX file using Noesis.")
+
+    parser.add_argument("-e", "--embed-image", action="store_true", help="Embed images in the .glb itself, rather than alongside the model file. Needed to load the model in web browsers.")
+
+    # Optional arguments to specify Noesis/PVRTexTool paths.
+    parser.add_argument("--noesis-path", type=str, help="Path to Noesis binary.")
+    parser.add_argument("--pvrtextool-path", type=str, help="Path to PVRTexTool.")
+    args = parser.parse_args()
+
+    global pathto, pathout  # Used when converting textures.
+    pathto = args.pod_path
+    pathout = args.glb_path
+
+    # Set Noesis and PVRTexTool paths.
+    global NOESIS_PATH, PVR_TEX_TOOL_PATH
+    if args.noesis_path:
+        NOESIS_PATH = args.noesis_path
+    if args.pvrtextool_path:
+        PVR_TEX_TOOL_PATH = args.pvrtextool_path
+
+    global embedimage
+    if args.embed_image is not None:
+        print("[DEBUG] Embedding all images in the output .glb.")
+        embedimage = args.embed_image
+
+    # Check if a companion XML exists with the POD.
+    expected_xml_path = str(os.path.basename(pathto)).replace(".pod", "_model.xml")
+    print(f"[DEBUG] Expected XML path for this POD: {expected_xml_path}")
+
+    global xmlroot  # Global that's initialized to None.
+    for root, dirs, files in os.walk(os.path.dirname(pathto)):
+        for file in files:
+            if file != expected_xml_path:
+                continue  # Skip if this file is not expected.
+            # File has been found:
+            print(f"[XML] XML file found: {str(file)}")
+            xmlpath = os.path.join(os.path.dirname(pathto), file)
+            xmldata = etree.parse(xmlpath)
+            xmlroot = xmldata.getroot()  # Global
+            print(f"Model is called \"{xmlroot.attrib["Name"]}\"")
+
+    converter = POD2GLB.open(pathto)
+    converter.save(pathout)
+
+    if args.fix_armature:
+        convert_to_fbx(pathout)
     else:
-      if FIX_COMPLETED == False:
-        print("[FIX - ERROR!] Fix will NOT continue. You don't have Noesis downloaded or didn't put it in the same directory as the converter (Or you misspelled the NOESIS variable if you tried to override the paths!). To download it, go to https://www.richwhitehouse.com/index.php?content=inc_projects.php&showproject=91.")
+        print("[DEBUG] Will not convert to FBX as --fix-armature option was not specified.")
 
-def help():
-  print("""
-Help:
-extract.py [POD path] [GLB path] [-f]
-
-Options:
--f: Tries to fix Blender quirks with GLB files by converting it to a FBX file using Noesis.
-
-Advanced:
-(Both variables have to be set inside the Python script. If you need to reset, just clear everything in the string.)
-PVRTEXTOOL: Variable used to override the location of PVRTexToolCli.
-NOESIS: Variable used to override the location of Noesis.
-""")
-#try:
-pathto = argv[1]
-pathout = argv[2]
-# Check if a companion XML exists with the POD.
-check = str(os.path.basename(pathto)).replace(".pod", "_model.xml" )
-print(f"[DEBUG] File to check is {check}")
-for root, dirs, files in os.walk(os.path.dirname(pathto)):
-  for xml in files:
-    if str(xml).endswith(".xml"):
-      print(f"[DEBUG] xml file to check is {xml}")
-    if xml == check:
-      xmlsupport = True
-      print("[XML] XML Detected!")
-      xmlfile = xml
-      xmldata = etree.parse(os.path.join(os.path.dirname(pathto) ,xmlfile))
-      xmlroot = xmldata.getroot()
-      print(f"Model is called {xmlroot.attrib["Name"]}")
-
-converter = POD2GLB.open(argv[1])
-#except IndexError:
-#  help()
-#  print("[ERROR!] Please add a path to the POD!")
-try:
-  converter.save(argv[2])
-except IndexError:
-  help()
-  print("[ERROR!] Add the path/name of the GLB file!")
-except NameError:
-  print("[ERROR!] GLB not specified.")
-try:
-  if argv[3] == "--fix-armature" or "-f":
-    NoesisFix(argv[2])
-except IndexError:
-  print("[DEBUG] Will not convert to FBX via Noesis as -f or --fix-armature option was not specified.")
+if __name__ == "__main__":
+    main()

@@ -45,9 +45,14 @@ class GLBExporter:
     self.samplers.append(sampler)
   
   def addData(self, data):
+    # Calculate the current offset
     offset = len(self.data)
+    # Pad current data to 4-byte boundary
+    padding = (4 - (offset % 4)) % 4
+    self.data += bytes(padding)
+    # Add the new data
     self.data += data
-    return offset
+    return offset + padding
   
   def addBufferView(self, bufferView):
     index = len(self.bufferViews)
