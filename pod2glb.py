@@ -620,8 +620,8 @@ class POD2GLB:
                     }
                 
                 self.glb.addAnimation(translationSampler, nodeIndex, "translation")
-                self.glb.addAnimation(rotationSampler, nodeIndex, "translation")
-                self.glb.addAnimation(scaleSampler, nodeIndex, "translation")
+                self.glb.addAnimation(rotationSampler, nodeIndex, "rotation")
+                self.glb.addAnimation(scaleSampler, nodeIndex, "scale")
                 
 
 
