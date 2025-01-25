@@ -8,7 +8,7 @@ import json
 class GLBExporter:
   def __init__(self):
     self.data = bytes()
-    self.asset = {"version": "2.0", "generator": f"PicelBoi (originally made by jaames) POD2GLB", "copyright": "2024 (c) Imagination Technologies (POD File Format), 2024 (c) PicelBoi, 2018 (c) jaames"}
+    self.asset = {"version": "2.0", "generator": f"PicelBoi (originally made by jaames) POD2GLB", "copyright": "2025 (c) ariankordi 2025 (c) Imagination Technologies (POD File Format), 2025 (c) PicelBoi, 2018 (c) jaames"}
     self.scene = 0
     self.scenes = [{
       "nodes": []
@@ -22,6 +22,12 @@ class GLBExporter:
     self.textures = []
     self.images = []
     self.samplers = []
+    self.animations = [
+      {
+        "samplers": [],
+        "channels": []
+      }
+    ]
 
   def addRootNodeIndex(self, index):
     self.scenes[0]["nodes"].append(index)
@@ -64,6 +70,26 @@ class GLBExporter:
     self.accessors.append(accessor)
     return index
   
+  def addAnimation(self, sampler, nodeindex, path):
+    # Get the amount of samplers in samplers so far
+    samplerIndex = len(self.animations[0]["samplers"])
+
+    # now add the sampler
+    self.animations[0]["samplers"].append(sampler)
+
+    # finally add the channel
+    channel = {
+      "sampler": samplerIndex,
+      "target": {
+        "node": nodeindex,
+        "path": path
+      }
+    }
+
+    # add the sampler
+    self.animations[0]["samplers"].append(channel)
+    
+
   def buildJSON(self):
     return {
       "asset": self.asset,
@@ -78,6 +104,7 @@ class GLBExporter:
       "textures": self.textures,
       "images": self.images,
       "samplers": self.samplers,
+      "animations": self.animations
     }
   
   def save(self, path):

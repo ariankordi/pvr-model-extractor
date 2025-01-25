@@ -9,6 +9,9 @@ import subprocess as sp
 import platform
 import PIL
 import argparse
+import math
+# Matrix decompose
+import glm
 
 # numpy is only needed for calculating bounding box
 hasnumpy = False
@@ -158,16 +161,19 @@ class POD2GLB:
         sp.run([
             tool_path,
             "-d", output,
-            "-i", input_file
+            "-i", input_file,
+            # Required to remove the _Out files without a janky fix.
+            "-noout"
         ], check=True)  # Tool will output to console.
 
-        pvr_out_fname = f"{os.path.splitext(input_file)[0]}_Out.pvr"
-        print(f"[HOTFIX] Deleting temporary PVRTexTool _Out file if it exists: {pvr_out_fname}")
-        try:
-            pvr_out_path = os.path.join(os.path.dirname(input_file), pvr_out_fname)
-            os.remove(pvr_out_path)
-        except FileNotFoundError:  # Ignore if that _Out file doesn't exist.
-            pass
+        # Deprecated.
+        #pvr_out_fname = f"{os.path.splitext(input_file)[0]}_Out.pvr"
+        #print(f"[HOTFIX] Deleting temporary PVRTexTool _Out file if it exists: {pvr_out_fname}")
+        #try:
+        #    pvr_out_path = os.path.join(os.path.dirname(input_file), pvr_out_fname)
+        #    os.remove(pvr_out_path)
+        #except FileNotFoundError:  # Ignore if that _Out file doesn't exist.
+        #    pass
 
     def add_textures_no_conversion(self):
         for (textureIndex, texture) in enumerate(self.scene.textures):
@@ -212,7 +218,7 @@ class POD2GLB:
             # Apply alpha maps.
             if not diffusearray:  # array is empty?
                 return  # assuming we have nothing else to do
-            print("[HOTFIX] Now merging alpha maps with albedo textures.")
+            print("[HOTFIX] Now merging alpha maps with albedo textures to conform with glTF specs.")
             for diffusemap in diffusearray:
                 for comalpha in range(len(diffusearray)):
                     diffusepath = diffusemap
@@ -231,6 +237,8 @@ class POD2GLB:
                         print("[DEBUG] Applied alpha map to diffuse map and re-saved.")
                     except FileNotFoundError as e:
                         print(f"[DEBUG] Caught: {e}. Not applying non-existent alpha.")
+
+            # Miitomo normal maps
 
         else:  # not pvrtextool_path
             print("[Part 04-2 - WARNING!] Textures will be added, but not converted (pvrtextool_path == False). You don't have PVRTexToolCLI downloaded or didn't put it in the same directory as the converter (Or you misspelled string inside the PVRTEXTOOL variable if you tried to override the paths!). To download it, go to https://developer.imaginationtech.com/solutions/pvrtextool/. If you have downloaded, move PVRTexToolCLI in the same directory as this script! The usual path (for Windows) is C:\\Imagination Technologies\\PowerVR_Graphics\\PowerVR_Tools\\PVRTexTool\\CLI\\Windows_x86_64.")
@@ -338,12 +346,18 @@ class POD2GLB:
                     "baseColorTexture": {
                         "index": material.diffuseTextureIndex,
                     },
-                    "roughnessFactor": 1 - material.shininess,
+                    # Actually? convert shininess to roughness https://computergraphics.stackexchange.com/questions/1515/what-is-the-accepted-method-of-converting-shininess-to-roughness-and-vice-versa
+                    "roughnessFactor": math.sqrt(2 / (material.shininess + 2)),
+                    # To my understanding metalness doesn't exist in the POD specifications - so defaulting to dielectric
+                    "metalnessFactor": 0
                 }
             else:
                 materialGLB["pbrMetallicRoughness"] = {
                     "baseColorFactor": material.diffuse.tolist() + [1],
-                    "roughnessFactor": 1 - material.shininess,
+                    # Actually? convert shininess to roughness https://computergraphics.stackexchange.com/questions/1515/what-is-the-accepted-method-of-converting-shininess-to-roughness-and-vice-versa
+                    "roughnessFactor": math.sqrt(2 / (material.shininess + 2)),
+                    # To my understanding metalness doesn't exist in the POD specifications - so defaulting to dielectric
+                    "metalnessFactor": 0
                 }
             if material.bumpMapTextureIndex > -1:
                 materialGLB["normalTexture"] = {
@@ -391,7 +405,10 @@ class POD2GLB:
                     # Albedo/uAlbedoTexture
                     "pbrMetallicRoughness": {  # Makes texture visible
                         "baseColorTexture": {},
-                        "roughnessFactor": 1 - material.shininess
+                        # Actually? convert shininess to roughness https://computergraphics.stackexchange.com/questions/1515/what-is-the-accepted-method-of-converting-shininess-to-roughness-and-vice-versa
+                        "roughnessFactor": math.sqrt(2 / (material.shininess + 2)),
+                        # To my understanding metalness doesn't exist in the POD specifications - so defaulting to dielectric
+                        "metalnessFactor": 0
                     },
                     # uNormalTexture
                     "normalTexture": {},
@@ -432,11 +449,23 @@ class POD2GLB:
             children = [i for (i, node) in enumerate(self.scene.nodes) if node.parentIndex == nodeIndex]
 
             nodeEntry = {
-                "name": node.name,
-                "translation": node.animation.positions.tolist(),
-                "scale": node.animation.scales[0:3].tolist(),
-                "rotation": node.animation.rotations[0:4].tolist(),
+                "name": node.name
             }
+
+            if node.animation.positions == None:
+                nodeEntry["translation"] = None
+            else:
+                nodeEntry["translation"] = node.animation.positions.tolist()
+
+            if node.animation.scales == None:
+                nodeEntry["scale"] = None
+            else:
+                nodeEntry["scale"] = node.animation.scales[0:3].tolist()
+
+            if node.animation.rotations == None:
+                nodeEntry["rotation"] = None
+            else:    
+                nodeEntry["rotation"] = node.animation.rotations[0:4].tolist()
 
             if children:  # skip if it is empty array
                 nodeEntry["children"] = children
@@ -458,13 +487,144 @@ class POD2GLB:
             # To convert or not to convert
             if node.animation.matrices is not None:
                 print(f"Converting matrix animation data for: {node.name}")
-                print("Currently animation porting is not available at this time, sorry :(")
                 print(node.animation.matrices)
-                # keyframes = []
-                # matrix = node.animation.matrices.tolist()
-                # for x in range(len(matrix)):
-                #     if x != 15 or:
-                #        rotationX = PVRMaths.PVRMatrix4x4RX3D()
+                keyframes = []
+                matrix = node.animation.matrices.tolist()
+                print(matrix)
+                matrixIndex = 0
+                for x in range(len(matrix)):
+                    matrixIndex = matrixIndex + 1
+                    if (nodeIndex + 1) % 16:
+                        translation = glm.vec3()
+                        rotation = glm.quat()
+                        scale = glm.vec3()
+                        skew = glm.vec3()
+                        perspective = glm.vec4()
+                        try:
+                            animation = glm.mat4(matrix[matrixIndex - 15], matrix[matrixIndex - 14], matrix[matrixIndex - 13], matrix[matrixIndex - 12], matrix[matrixIndex - 11], matrix[matrixIndex - 10], matrix[matrixIndex - 9], matrix[matrixIndex - 8], matrix[matrixIndex - 7], matrix[matrixIndex - 6], matrix[matrixIndex - 5], matrix[matrixIndex - 4], matrix[matrixIndex - 3], matrix[matrixIndex - 2], matrix[matrixIndex - 1], matrix[matrixIndex])
+                        except IndexError:
+                            animation = glm.mat4()
+
+                        decompose = glm.decompose(animation, scale, rotation, translation, skew, perspective)
+                        matrixkey = [translation, rotation, scale]
+                        print(matrixkey)
+                        keyframes.append(matrixkey)
+
+                # Now let's add the translation, rotation, and scale
+
+                translations = []
+                rotations = []
+                scales = []
+                times = []
+
+                print("baka mitai")
+
+                timer = 0
+
+                for keyframe in keyframes:
+                    # Create a buffer view for the translation, rotation, and scales
+
+                    translation = keyframe[0].x, keyframe[0].y, keyframe[0].z
+
+                    rotation = keyframe[1].w, keyframe[1].x, keyframe[1].y, keyframe[1].z
+                    
+                    scale = keyframe[2].x, keyframe[2].y, keyframe[2].z
+                  
+                    translations.append(np.array(translation))
+                    rotations.append(np.array(rotation))
+                    scales.append(np.array(scale))
+
+                    times.append(timer)
+                    timer = timer + 0.33
+                  
+                tarray = np.asarray(translations)
+                rarray = np.asarray(rotations)
+                sarray = np.asarray(scale)
+                timearray = np.asarray(times)
+
+                translationAccessorIndex = self.glb.addAccessor({
+                "bufferView": self.glb.addBufferView({
+                    "buffer": 0,
+                    "byteOffset": self.glb.addData(tarray.tobytes()),
+                    "byteLength": len(translations) * tarray.itemsize,
+                }),
+                "byteOffset": 0,
+                # https://github.com/KhronosGroup/glTF/blob/master/specification/2.0/README.md#accessor-element-size
+                "componentType": 5126,
+                "count": len(keyframes),
+                "type": "VEC3",
+                #"max": [float(x) for x in tarray.max(axis=0)],
+                #"min": [float(x) for x in tarray.min(axis=0)]
+            })
+                
+                rotationAccessorIndex = self.glb.addAccessor({
+                "bufferView": self.glb.addBufferView({
+                    "buffer": 0,
+                    "byteOffset": self.glb.addData(rarray.tobytes()),
+                    "byteLength": len(rotations) * rarray.itemsize,
+                }),
+                "byteOffset": 0,
+                # https://github.com/KhronosGroup/glTF/blob/master/specification/2.0/README.md#accessor-element-size
+                "componentType": 5126,
+                "count": len(keyframes),
+                "type": "VEC4",
+                #"max": [float(x) for x in rarray.max(axis=0)],
+                #"min": [float(x) for x in rarray.min(axis=0)]
+            })
+                
+                scaleAccessorIndex = self.glb.addAccessor({
+                "bufferView": self.glb.addBufferView({
+                    "buffer": 0,
+                    "byteOffset": self.glb.addData(sarray.tobytes()),
+                    "byteLength": len(scales) * sarray.itemsize,
+                }),
+                "byteOffset": 0,
+                # https://github.com/KhronosGroup/glTF/blob/master/specification/2.0/README.md#accessor-element-size
+                "componentType": 5126,
+                "count": len(keyframes),
+                "type": "VEC3",
+                #"max": [float(x) for x in sarray.max(axis=0)],
+                #"min": [float(x) for x in sarray.min(axis=0)]
+            })
+                
+                timesAccessorIndex = self.glb.addAccessor({
+                "bufferView": self.glb.addBufferView({
+                    "buffer": 0,
+                    "byteOffset": self.glb.addData(timearray.tobytes()),
+                    "byteLength": len(times) * timearray.itemsize,
+                }),
+                "byteOffset": 0,
+                # https://github.com/KhronosGroup/glTF/blob/master/specification/2.0/README.md#accessor-element-size
+                "componentType": 5126,
+                "count": len(keyframes),
+                "type": "VEC3",
+                #"max": [float(x) for x in timearray.max(axis=0)],
+                #"min": [float(x) for x in timearray.min(axis=0)]
+            })
+                
+                # Add animation
+                translationSampler = {
+                        "input": timesAccessorIndex,
+                        "interpolation": "LINEAR",
+                        "output": translationAccessorIndex
+                    }
+                scaleSampler = {
+                        "input": timesAccessorIndex,
+                        "interpolation": "LINEAR",
+                        "output": scaleAccessorIndex
+                    }
+                rotationSampler = {
+                        "input": timesAccessorIndex,
+                        "interpolation": "LINEAR",
+                        "output": rotationAccessorIndex
+                    }
+                
+                self.glb.addAnimation(translationSampler, nodeIndex, "translation")
+                self.glb.addAnimation(rotationSampler, nodeIndex, "translation")
+                self.glb.addAnimation(scaleSampler, nodeIndex, "translation")
+                
+
+
 
     def convert_meshes(self):
         print("[Part 02] Converting meshes...")
@@ -611,12 +771,16 @@ def main():
     # Optional flag to fix armature/convert to FBX.
     parser.add_argument("-f", "--fix-armature", action="store_true", help="Tries to fix Blender quirks with GLB files by converting it to a FBX file using Noesis.")
 
+    # Embed images in GLB?
     parser.add_argument("-e", "--embed-image", action="store_true", help="Embed images in the .glb itself, rather than alongside the model file. Needed to load the model in web browsers.")
+
+    # Convert Miitomo normal maps into a more standard format.
+    parser.add_argument("-n", "--miitomo-normal-fix", action="store_true", help="Required to properly render the normal maps in programs like Blender.")
 
     # Optional arguments to specify Noesis/PVRTexTool paths.
     parser.add_argument("--noesis-path", type=str, help="Path to Noesis binary.")
     parser.add_argument("--pvrtextool-path", type=str, help="Path to PVRTexTool.")
-    args = parser.parse_args()
+    args = parser.parse_args(["/home/picelboi/Downloads/MiitomoExtract/asset/model/character/animation/output/animWaitHandShake.Anim.pod","Outfits/HandShake.glb"])
 
     global pathto, pathout  # Used when converting textures.
     pathto = args.pod_path
