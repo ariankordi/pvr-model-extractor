@@ -23,7 +23,6 @@ except ImportError as e:
 
 # Override default paths for tools.
 # These are overridden by the argparse arguments.
-NOESIS_PATH = ""
 PVR_TEX_TOOL_PATH = ""
 
 # Global Variables (Don't touch):
@@ -723,43 +722,6 @@ class POD2GLB:
                 }],
             })
 
-def run_noesis_conversion(file, noesis_path):
-    print("Using Noesis to convert to FBX as a way to fix it mainly because I'm lazy. Running now")
-    out_file = os.path.basename(f"{os.path.splitext(file)[0]}.fbx")
-    noesis_command = [noesis_path, "?cmode", file, out_file]
-    if platform != "Windows":
-        noesis_command = ["wine"] + noesis_command
-        print("[FIX 01] Trying to use Wine to run Noesis")
-    sp.run(noesis_command, check=True)
-    print("[FIX - FINISH!] Should generate a FBX file - use that instead of the GLB file.")
-    global FBX_CONV_COMPLETED
-    FBX_CONV_COMPLETED = True
-
-def convert_to_fbx(file):  # Using Noesis/--fix-armature
-    print("[FIX 00] Trying to convert the GLB to FBX because Blender doesn't understand the armature this tool generates.")
-    # Check if 64-bit version is available
-    slash = "\\" if platform == "Windows" else "/"
-    noesis_path = f"{os.path.abspath(os.getcwd())}{slash}Noesis64.exe"
-
-    print(f"[DEBUG] Path for Noesis should be: {noesis_path}")
-    if path.exists(noesis_path):
-        run_noesis_conversion(file, noesis_path)
-        return  # Finish and do not go further.
-    # not noesis_exists:
-    print("[DEBUG] 64-bit version NOT found. Trying 32-bit/override path.")
-
-    # Check if 32-bit version is available
-    noesis_path = f"{os.path.abspath(os.getcwd())}{slash}Noesis.exe"
-    # Override if user has a path set for Noesis.
-    if NOESIS_PATH != "":
-        print(f"[OVERRIDE] Overriding path for Noesis with {NOESIS_PATH}")
-        noesis_path = NOESIS_PATH
-    print(f"[DEBUG] Trying Noesis path: {noesis_path}")
-    if path.exists(noesis_path):
-        run_noesis_conversion(file, noesis_path)
-    else:
-        print("[FIX - ERROR!] Fix will NOT continue. You don't have Noesis downloaded or didn't put it in the same directory as the converter (Or you misspelled the NOESIS_PATH variable if you tried to override the paths!). To download it, go to https://www.richwhitehouse.com/index.php?content=inc_projects.php&showproject=91.")
-
 def main():
     # Create argparse instance and add arguments.
     parser = argparse.ArgumentParser(description="Converts POD models from Miitomo to glTF (.glb) format.")
@@ -777,8 +739,7 @@ def main():
     # Convert Miitomo normal maps into a more standard format.
     parser.add_argument("-n", "--miitomo-normal-fix", action="store_true", help="Required to properly render the normal maps in programs like Blender.")
 
-    # Optional arguments to specify Noesis/PVRTexTool paths.
-    parser.add_argument("--noesis-path", type=str, help="Path to Noesis binary.")
+    # Optional arguments to specify PVRTexTool paths.
     parser.add_argument("--pvrtextool-path", type=str, help="Path to PVRTexTool.")
     args = parser.parse_args(["/home/picelboi/Downloads/MiitomoExtract/asset/model/character/animation/output/animWaitHandShake.Anim.pod","Outfits/HandShake.glb"])
 
@@ -786,10 +747,7 @@ def main():
     pathto = args.pod_path
     pathout = args.glb_path
 
-    # Set Noesis and PVRTexTool paths.
-    global NOESIS_PATH, PVR_TEX_TOOL_PATH
-    if args.noesis_path:
-        NOESIS_PATH = args.noesis_path
+    # Set and PVRTexTool paths.
     if args.pvrtextool_path:
         PVR_TEX_TOOL_PATH = args.pvrtextool_path
 
