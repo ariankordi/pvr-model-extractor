@@ -105,6 +105,8 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+.zip
+.tga
 
 # Spyder project settings
 .spyderproject
@@ -138,3 +140,7 @@ noesiskinect.dll
 ReadMe.txt
 pluginsource.zip
 
+Mods/Hats/headwear0304.zip
+.gitignore
+Mods/Hats/PBHardHat/headwear0304/headwear0304.Mdl_model.xml
+Mods/

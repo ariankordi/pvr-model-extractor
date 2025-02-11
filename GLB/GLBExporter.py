@@ -5,10 +5,17 @@ import numpy as np
 from struct import pack
 import json
 
+mesh_exist = False
+image_exist = False
+material_exist = False
+sampler_exist = False
+texture_exist = False
+animation_exist = False
+
 class GLBExporter:
   def __init__(self):
     self.data = bytes()
-    self.asset = {"version": "2.0", "generator": f"PicelBoi (originally made by jaames) POD2GLB", "copyright": "2025 (c) ariankordi 2025 (c) Imagination Technologies (POD File Format), 2025 (c) PicelBoi, 2018 (c) jaames"}
+    self.asset = {"version": "2.0", "generator": f"PicelBoi POD2GLB", "copyright": "2025 (c) ariankordi, 2025 (c) Imagination Technologies (POD File Format), 2025 (c) PicelBoi, 2018 (c) jaames"}
     self.scene = 0
     self.scenes = [{
       "nodes": []
@@ -36,19 +43,29 @@ class GLBExporter:
     self.nodes.append(node)
 
   def addMesh(self, mesh):
+    global mesh_exist
     self.meshes.append(mesh)
+    mesh_exist = True
 
   def addMaterial(self, material):
+    global material_exist
     self.materials.append(material)
+    material_exist = True
 
   def addTexture(self, texture):
+    global texture_exist
     self.textures.append(texture)
+    texture_exist =True
 
   def addImage(self, image):
+    global image_exist
     self.images.append(image)
+    image_exist = True
 
   def addSampler(self, sampler):
+    global sampler_exist
     self.samplers.append(sampler)
+    sampler_exist = True
   
   def addData(self, data):
     # Calculate the current offset
@@ -71,8 +88,10 @@ class GLBExporter:
     return index
   
   def addAnimation(self, sampler, nodeindex, path):
+    global animation_exist
+    animation_exist = True
     # Get the amount of samplers in samplers so far
-    samplerIndex = len(self.animations[0]["samplers"])
+    samplerIndex = len(self.animations[0]["samplers"]) - 1
 
     # now add the sampler
     self.animations[0]["samplers"].append(sampler)
@@ -87,7 +106,7 @@ class GLBExporter:
     }
 
     # add the sampler
-    self.animations[0]["samplers"].append(channel)
+    self.animations[0]["channels"].append(channel)
     
 
   def buildJSON(self):

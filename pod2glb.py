@@ -452,17 +452,17 @@ class POD2GLB:
             }
 
             if node.animation.positions == None:
-                nodeEntry["translation"] = None
+                nodeEntry["translation"] = [0,0,0]
             else:
                 nodeEntry["translation"] = node.animation.positions.tolist()
 
             if node.animation.scales == None:
-                nodeEntry["scale"] = None
+                nodeEntry["scale"] = [1,1,1]
             else:
                 nodeEntry["scale"] = node.animation.scales[0:3].tolist()
 
             if node.animation.rotations == None:
-                nodeEntry["rotation"] = None
+                nodeEntry["rotation"] = [1,0,0,0]
             else:    
                 nodeEntry["rotation"] = node.animation.rotations[0:4].tolist()
 
@@ -534,7 +534,7 @@ class POD2GLB:
                     scales.append(np.array(scale))
 
                     times.append(timer)
-                    timer = timer + 0.33
+                    timer += 0.33
                   
                 tarray = np.asarray(translations)
                 rarray = np.asarray(rotations)
@@ -552,8 +552,8 @@ class POD2GLB:
                 "componentType": 5126,
                 "count": len(keyframes),
                 "type": "VEC3",
-                #"max": [float(x) for x in tarray.max(axis=0)],
-                #"min": [float(x) for x in tarray.min(axis=0)]
+                #"max": [tarray.max(axis=0)],
+                #"min": [tarray.min(axis=0)]
             })
                 
                 rotationAccessorIndex = self.glb.addAccessor({
@@ -567,8 +567,8 @@ class POD2GLB:
                 "componentType": 5126,
                 "count": len(keyframes),
                 "type": "VEC4",
-                #"max": [float(x) for x in rarray.max(axis=0)],
-                #"min": [float(x) for x in rarray.min(axis=0)]
+                #"max": [rarray.max(axis=0)],
+                #"min": [rarray.min(axis=0)]
             })
                 
                 scaleAccessorIndex = self.glb.addAccessor({
@@ -582,8 +582,8 @@ class POD2GLB:
                 "componentType": 5126,
                 "count": len(keyframes),
                 "type": "VEC3",
-                #"max": [float(x) for x in sarray.max(axis=0)],
-                #"min": [float(x) for x in sarray.min(axis=0)]
+                #"max": [sarray.max(axis=0)],
+                #"min": [sarray.min(axis=0)]
             })
                 
                 timesAccessorIndex = self.glb.addAccessor({
@@ -596,9 +596,9 @@ class POD2GLB:
                 # https://github.com/KhronosGroup/glTF/blob/master/specification/2.0/README.md#accessor-element-size
                 "componentType": 5126,
                 "count": len(keyframes),
-                "type": "VEC3",
-                #"max": [float(x) for x in timearray.max(axis=0)],
-                #"min": [float(x) for x in timearray.min(axis=0)]
+                "type": "SCALAR",
+                #"max": [timearray.max(axis=0)],
+                #"min": [timearray.min(axis=0)]
             })
                 
                 # Add animation
@@ -730,9 +730,6 @@ def main():
     parser.add_argument("pod_path", type=str, help="Path to the input POD file. The XML and textures are expected to be relative to this.")
     parser.add_argument("glb_path", type=str, help="Path to the output glTF model/.glb file.")
 
-    # Optional flag to fix armature/convert to FBX.
-    parser.add_argument("-f", "--fix-armature", action="store_true", help="Tries to fix Blender quirks with GLB files by converting it to a FBX file using Noesis.")
-
     # Embed images in GLB?
     parser.add_argument("-e", "--embed-image", action="store_true", help="Embed images in the .glb itself, rather than alongside the model file. Needed to load the model in web browsers.")
 
@@ -741,7 +738,7 @@ def main():
 
     # Optional arguments to specify PVRTexTool paths.
     parser.add_argument("--pvrtextool-path", type=str, help="Path to PVRTexTool.")
-    args = parser.parse_args(["/home/picelboi/Downloads/MiitomoExtract/asset/model/character/animation/output/animWaitHandShake.Anim.pod","Outfits/HandShake.glb"])
+    args = parser.parse_args()
 
     global pathto, pathout  # Used when converting textures.
     pathto = args.pod_path
@@ -774,11 +771,6 @@ def main():
 
     converter = POD2GLB.open(pathto)
     converter.save(pathout)
-
-    if args.fix_armature:
-        convert_to_fbx(pathout)
-    else:
-        print("[DEBUG] Will not convert to FBX as --fix-armature option was not specified.")
 
 if __name__ == "__main__":
     main()
