@@ -29,6 +29,7 @@ class GLBExporter:
     self.textures = []
     self.images = []
     self.samplers = []
+    self.skins = []
     self.animations = [
       {
         "samplers": [],
@@ -87,6 +88,11 @@ class GLBExporter:
     self.accessors.append(accessor)
     return index
   
+  def addSkin(self, bones):
+    self.skins.append({
+      "joints": bones
+    })
+
   def addAnimation(self, sampler, nodeindex, path):
     global animation_exist
     animation_exist = True

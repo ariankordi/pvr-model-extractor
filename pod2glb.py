@@ -10,6 +10,10 @@ import platform
 import PIL
 import argparse
 import math
+import logging
+import coloredlogs
+logger = logging.getLogger(__name__)
+coloredlogs.install(level='DEBUG')
 # Matrix decompose
 import glm
 
@@ -19,7 +23,7 @@ try:
     import numpy as np
     hasnumpy = True
 except ImportError as e:
-    print(f"[WARNING] numpy could not be imported: {e}. Will not be able to calculate bounding box which is probably fine")
+    logging.warning(f"[WARNING] numpy could not be imported: {e}. Will not be able to calculate bounding box which is probably fine")
 
 # Override default paths for tools.
 # These are overridden by the argparse arguments.
@@ -45,6 +49,7 @@ print(f"""
 """)
 
 class POD2GLB:
+    bones = []
     # Table to resolve GLenum strings to values needed for glTF.
     GLENUM = {
         "GL_NEAREST": 9728,
@@ -89,13 +94,13 @@ class POD2GLB:
 
     @classmethod
     def open(cls, inpath):
-        print("[Part 00] Loading POD...")
+        logging.info("[Part 00] Loading POD...")
         converter = cls()
         converter.load(inpath)
         return converter
 
     def load(self, inpath):
-        print("[Part 01] Starting up all loaders...")
+        logging.info("[Part 01] Starting up all loaders...")
         # create a glb exporter
         self.glb = GLBExporter()
         # create a pvr pod parser
@@ -107,11 +112,11 @@ class POD2GLB:
         self.convert_materials()
 
     def save(self, path):
-        print("[Part 06] Saving all data to a GLB format...")
+        logging.info("[Part 06] Saving all data to a GLB format...")
         if xmlroot is not None:
-            print("[WARNING] Due to constraints with GLTF, any Mask textures found will be attached as \"Emission\". It is up to you to reattach and correctly apply this map.")
+            logging.warning("[WARNING] Due to constraints with GLTF, any Mask textures found will be attached as \"Emission\". It is up to you to reattach and correctly apply this map.")
         self.glb.save(path)
-        print("[FINISH!] Done!")
+        logging.info("[FINISH!] Done!")
 
     @staticmethod
     def findallsamplers(xmlmaterial):
@@ -120,7 +125,7 @@ class POD2GLB:
             samp = material.findall("Sampler2D")
             for sample in samp:
                 samplers += 1
-        print(f"[DEBUG] Found {samplers} in XML file.")
+        logging.debug(f"[DEBUG] Found {samplers} in XML file.")
         return samplers
 
     @staticmethod
@@ -128,7 +133,7 @@ class POD2GLB:
         name = str(sampler.attrib["Name"])
         filename = sampler.find("FileName").text
         if filename is None:
-            print(f"[DEBUG] Texture {name} does not have a filename, marking as unused.")
+            logging.debug(f"[DEBUG] Texture {name} does not have a filename, marking as unused.")
             return None  # Texture is not used.
         # Replace .tga with .png: vv
         path = str(filename).replace(".tga", ".png")
@@ -149,14 +154,14 @@ class POD2GLB:
         if PVR_TEX_TOOL_PATH != "":
             overridden_text = "(OVERRIDDEN!) "
             pvrtextool_path = PVR_TEX_TOOL_PATH
-        print(f"[DEBUG] Path for PVRTexToolCLI {overridden_text}is: {pvrtextool_path}")
+        logging.debug(f"[DEBUG] Path for PVRTexToolCLI {overridden_text}is: {pvrtextool_path}")
         pvrtextool_exists = path.exists(pvrtextool_path)
         ret = False if not pvrtextool_exists else pvrtextool_path
         return ret
 
     @staticmethod
     def convert_texture_single(tool_path, input_file, output):
-        print(f"[DEBUG] Running PVRTexTool. Will be saved at {output}")
+        logging.debug(f"[DEBUG] Running PVRTexTool. Will be saved at {output}")
         sp.run([
             tool_path,
             "-d", output,
@@ -176,7 +181,7 @@ class POD2GLB:
 
     def add_textures_no_conversion(self):
         for (textureIndex, texture) in enumerate(self.scene.textures):
-            print(f"[Part 04-1] Adding image {texture.getPath()}...")
+            logging.info(f"[Part 04-1] Adding image {texture.getPath()}...")
 
             self.glb.addImage({
                 "uri": texture.getPath(dir="", ext=".png")
@@ -197,12 +202,12 @@ class POD2GLB:
         if xmlroot is None:
             # Assumes all textures are in current directory.
             return self.add_textures_no_conversion()
-        print("[Part 04] Converting textures...")
+        logging.info("[Part 04] Converting textures...")
 
         pvrtextool_path = self.get_pvrtextool_path_and_exists()
         if pvrtextool_path:  # Is PVRTexTool available?
             dir_of_input = os.path.dirname(pathto)
-            print("[Part 04-2] Now converting all images. Walking path:")
+            logging.info("[Part 04-2] Now converting all images. Walking path:")
 
             for root, dirs, files in os.walk(dir_of_input):
                 for file in files:
@@ -210,7 +215,7 @@ class POD2GLB:
                         continue  # Skip all non-pvr files.
                     # Input is a pvr file:
                     output = os.path.join(os.path.dirname(pathout), os.path.basename(f"{os.path.splitext(file)[0]}.png"))
-                    print(f"[Part 04-2] Converting {file} to png...")
+                    logging.info(f"[Part 04-2] Converting {file} to png...")
                     input_file = os.path.join(root, file)
                     self.convert_texture_single(pvrtextool_path, input_file, output)
 
@@ -222,7 +227,7 @@ class POD2GLB:
                 for comalpha in range(len(diffusearray)):
                     diffusepath = diffusemap
                     if diffusepath is None or comalpha >= len(alphaarray):
-                        print("[DEBUG] Skipping alpha maps.")
+                        logging.debug("[DEBUG] Skipping alpha maps.")
                         continue
                     try:
                         alphamap = PIL.Image.open(alphaarray[comalpha]).convert("L")
@@ -233,14 +238,14 @@ class POD2GLB:
                         alphamap.resize(alpharesize)
                         diffusemap.putalpha(alphamap)
                         diffusemap.save(diffusepath)
-                        print("[DEBUG] Applied alpha map to diffuse map and re-saved.")
+                        logging.debug("[DEBUG] Applied alpha map to diffuse map and re-saved.")
                     except FileNotFoundError as e:
-                        print(f"[DEBUG] Caught: {e}. Not applying non-existent alpha.")
+                        logging.debug(f"[DEBUG] Caught: {e}. Not applying non-existent alpha.")
 
             # Miitomo normal maps
 
         else:  # not pvrtextool_path
-            print("[Part 04-2 - WARNING!] Textures will be added, but not converted (pvrtextool_path == False). You don't have PVRTexToolCLI downloaded or didn't put it in the same directory as the converter (Or you misspelled string inside the PVRTEXTOOL variable if you tried to override the paths!). To download it, go to https://developer.imaginationtech.com/solutions/pvrtextool/. If you have downloaded, move PVRTexToolCLI in the same directory as this script! The usual path (for Windows) is C:\\Imagination Technologies\\PowerVR_Graphics\\PowerVR_Tools\\PVRTexTool\\CLI\\Windows_x86_64.")
+            logging.info("[Part 04-2 - WARNING!] Textures will be added, but not converted (pvrtextool_path == False). You don't have PVRTexToolCLI downloaded or didn't put it in the same directory as the converter (Or you misspelled string inside the PVRTEXTOOL variable if you tried to override the paths!). To download it, go to https://developer.imaginationtech.com/solutions/pvrtextool/. If you have downloaded, move PVRTexToolCLI in the same directory as this script! The usual path (for Windows) is C:\\Imagination Technologies\\PowerVR_Graphics\\PowerVR_Tools\\PVRTexTool\\CLI\\Windows_x86_64.")
 
     def add_textures(self):
         if xmlroot is None:  # Take non-XML path.
@@ -267,10 +272,10 @@ class POD2GLB:
 
                 if texture["name"] == "uAlbedoTexture":
                     diffusearray.append(abspath)
-                    print("[DEBUG] Diffuse Map found.")
+                    logging.debug("[DEBUG] Diffuse Map found.")
                 elif texture["name"] == "uAlphaTexture":
                     alphaarray.append(abspath)
-                    print("[DEBUG] Alpha Map found.")
+                    logging.debug("[DEBUG] Alpha Map found.")
 
         # Convert textures here.
         self.convert_textures(alphaarray, diffusearray)
@@ -281,7 +286,7 @@ class POD2GLB:
                 if texture is None:
                     continue
                 if texture["name"] not in self.sampler_table.keys():
-                    print(f"[DEBUG] Skipping image {texture["name"]} since it is not in sampler_table and will not be added as a sampler either.")
+                    logging.debug(f"[DEBUG] Skipping image {texture["name"]} since it is not in sampler_table and will not be added as a sampler either.")
                     continue
 
                 mag = sampler.find("GL_TEXTURE_MAG_FILTER")
@@ -294,7 +299,7 @@ class POD2GLB:
                 wrapS = self.GLENUM.get(S.text, self.GLENUM["GL_REPEAT"])  # S (U) Wrapping Mode
                 wrapT = self.GLENUM.get(T.text, self.GLENUM["GL_REPEAT"])  # T (V) Wrapping Mode
 
-                print(f"[Part 04-1] Adding image {texture["name"]}, path {texture["path"]}...")
+                logging.info(f"[Part 04-1] Adding image {texture["name"]}, path {texture["path"]}...")
 
                 if embedimage:
                     with open(texture["path"], "rb") as img_file:
@@ -305,7 +310,7 @@ class POD2GLB:
                         "byteOffset": self.glb.addData(image_data),  # buffer offset
                         "byteLength": len(image_data)
                     })
-                    print(f"[DEBUG] Read image in, adding as buffer view index {buffer_view_index}")
+                    logging.debug(f"[DEBUG] Read image in, adding as buffer view index {buffer_view_index}")
                     # Add the image with bufferView and MIME type
                     self.glb.addImage({
                         "bufferView": buffer_view_index,
@@ -332,7 +337,7 @@ class POD2GLB:
                 textureIndex += 1
 
     def convert_materials(self):
-        print("[Part 05] Converting materials...")
+        logging.info("[Part 05] Converting materials...")
         if xmlroot is not None:
             return self.convert_materials_with_xml()
         # Standard non-XML path.
@@ -348,7 +353,7 @@ class POD2GLB:
                     # Actually? convert shininess to roughness https://computergraphics.stackexchange.com/questions/1515/what-is-the-accepted-method-of-converting-shininess-to-roughness-and-vice-versa
                     "roughnessFactor": math.sqrt(2 / (material.shininess + 2)),
                     # To my understanding metalness doesn't exist in the POD specifications - so defaulting to dielectric
-                    "metalnessFactor": 0
+                    "metallicFactor": 0
                 }
             else:
                 materialGLB["pbrMetallicRoughness"] = {
@@ -356,7 +361,7 @@ class POD2GLB:
                     # Actually? convert shininess to roughness https://computergraphics.stackexchange.com/questions/1515/what-is-the-accepted-method-of-converting-shininess-to-roughness-and-vice-versa
                     "roughnessFactor": math.sqrt(2 / (material.shininess + 2)),
                     # To my understanding metalness doesn't exist in the POD specifications - so defaulting to dielectric
-                    "metalnessFactor": 0
+                    "metallicFactor": 0
                 }
             if material.bumpMapTextureIndex > -1:
                 materialGLB["normalTexture"] = {
@@ -376,12 +381,12 @@ class POD2GLB:
         for (materialIndex, material) in enumerate(self.scene.materials):
             # Settings to list which option is available
             for materialkeys in xmlmaterial:
-                print(f"[DEBUG] Material from POD Name is {material.name}, from XML: {materialkeys.attrib["Name"]}")
+                logging.debug(f"[DEBUG] Material from POD Name is {material.name}, from XML: {materialkeys.attrib["Name"]}")
                 if str(material.name) != materialkeys.attrib["Name"]:
                     #print(f"[DEBUG] Material is not the same! {materialkeys.attrib["Name"]} is not the same as {material.name}")
                     continue
 
-                print(f"[Part 05-1] Adding material {material.name}...")
+                logging.info(f"[Part 05-1] Adding material {material.name}...")
 
                 cull_mode_to_double_sided = {
                     "None": True,
@@ -394,10 +399,10 @@ class POD2GLB:
                 }
                 culling_key = materialkeys.find("Culling")
                 if culling_key == "Front":
-                    print("[WARNING] Culling is set to Front. This is not supported.")
+                    logging.warning("[WARNING] Culling is set to Front. This is not supported.")
                 # Double sided as false by default.
                 double_sided = cull_mode_to_double_sided.get(culling_key, False)
-                print(f"[DEBUG] Material {material.name} {"does NOT have" if double_sided else "has"} backface culling on.")
+                logging.debug(f"[DEBUG] Material {material.name} {"does NOT have" if double_sided else "has"} backface culling on.")
 
                 PODMaterial = {
                     "name": material.name,
@@ -407,7 +412,7 @@ class POD2GLB:
                         # Actually? convert shininess to roughness https://computergraphics.stackexchange.com/questions/1515/what-is-the-accepted-method-of-converting-shininess-to-roughness-and-vice-versa
                         "roughnessFactor": math.sqrt(2 / (material.shininess + 2)),
                         # To my understanding metalness doesn't exist in the POD specifications - so defaulting to dielectric
-                        "metalnessFactor": 0
+                        "metallicFactor": 0
                     },
                     # uNormalTexture
                     "normalTexture": {},
@@ -423,10 +428,11 @@ class POD2GLB:
                     name = sampler.attrib["Name"]
                     material_tex_name = self.sampler_table.get(name, None)
                     if material_tex_name is not None:
-                        print(f"[DEBUG] Has sampler {name}!")
+                        logging.debug(f"[DEBUG] Has sampler {name}!")
                         # glTF validator: Unexpected property. vv
-                        if sampler.find("UVIdx") is not None:
-                            PODMaterial[material_tex_name]["texCoord"] = int((sampler.find("UVIdx")).text)
+                        # Deprecated.
+                        #if sampler.find("UVIdx") is not None:
+                        #    PODMaterial[material_tex_name]["texCoord"] = int((sampler.find("UVIdx")).text)
 
                         # uAlbedoTexture:
                         if material_tex_name == "pbrMetallicRoughness":
@@ -441,6 +447,12 @@ class POD2GLB:
                         PODMaterial["alphaMode"] = "BLEND"
 
                 self.glb.addMaterial(PODMaterial)
+
+
+    def add_skin(self):
+        logging.info("Adding skin/skeleton...")
+        logging.debug(self.bones)
+        self.glb.addSkin(self.bones)
 
     def convert_nodes(self):
         print("[Part 03] Converting nodes...")
@@ -476,6 +488,7 @@ class POD2GLB:
                 nodeEntry["mesh"] = meshIndex
                 if node.materialIndex != -1:
                     self.glb.meshes[meshIndex]["primitives"][0]["material"] = node.materialIndex
+            # assume every other node is a bone ig
 
             # if the node index is -1 it is a root node
             if node.parentIndex == -1:
@@ -621,12 +634,11 @@ class POD2GLB:
                 self.glb.addAnimation(translationSampler, nodeIndex, "translation")
                 self.glb.addAnimation(rotationSampler, nodeIndex, "rotation")
                 self.glb.addAnimation(scaleSampler, nodeIndex, "scale")
-                
 
-
+        self.add_skin()
 
     def convert_meshes(self):
-        print("[Part 02] Converting meshes...")
+        logging.info("[Part 02] Converting meshes...")
         for (meshIndex, mesh) in enumerate(self.scene.meshes):
             attributes = {}
             numFaces = mesh.primitiveData["numFaces"]
@@ -647,6 +659,11 @@ class POD2GLB:
                 "count": numFaces * 3,
                 "type": "SCALAR"
             })
+
+            for x in mesh.boneBatches["batches"]:
+                if x != 0:
+                    if x not in self.bones:
+                        self.bones.append(x)
 
             # vertex buffer view
             vertexElements = mesh.vertexElements
@@ -675,6 +692,15 @@ class POD2GLB:
                     .get(element["numComponents"], None)
                 if accessorType is None:
                     raise NotImplementedError(f"Don't have glTF accessor data type for number of components: {element["numComponents"]}")
+
+                # Casually define type per vertex element name.
+
+                if name == "TANGENT":
+                    accessorType = "VEC4"
+                elif name == "JOINTS_0":
+                    accessorType = "VEC4"
+                elif name == "WEIGHTS_0":
+                    accessorType = "VEC4"
 
                 componentType = self.vertex_data_type_to_accessor_data_types \
                     .get(element["dataType"], None)
@@ -738,7 +764,7 @@ def main():
 
     # Optional arguments to specify PVRTexTool paths.
     parser.add_argument("--pvrtextool-path", type=str, help="Path to PVRTexTool.")
-    args = parser.parse_args()
+    args = parser.parse_args(["/home/picelboi/Downloads/MiitomoExtract/asset/model/character/bodyBottomsA/output/bodyBottomsA0048~/bodyBottomsA0048/bodyBottomsA0048Hi.Mdl.pod", "Test/pants.glb"])
 
     global pathto, pathout  # Used when converting textures.
     pathto = args.pod_path
