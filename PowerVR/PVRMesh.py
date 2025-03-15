@@ -93,9 +93,7 @@ class PVRMesh:
       "offset": offset,
       "dataIndex": dataIndex,
     }
-          # You might be asking, PicelBoi, why is this NEEDED? Well, long story short... glTF requires I guess a bit of changes and stuff so gltf applications can read this, so yeah.
-    if semantic == "TANGENT":
-
-      logger.debug(debuffer(self.vertexElementData[0], stride))
+    # You might be asking, PicelBoi, why is this NEEDED? Well, long story short... glTF requires I guess a bit of changes and stuff so gltf applications can read this, so yeah
+    logger.debug(f"{semantic}:" + debuffer(self.vertexElementData[0], stride))
       
     return EPODErrorCodes.eNoError
