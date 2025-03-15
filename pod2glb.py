@@ -50,6 +50,7 @@ print(f"""
 
 class POD2GLB:
     bones = []
+    isSkinned = []
     # Table to resolve GLenum strings to values needed for glTF.
     GLENUM = {
         "GL_NEAREST": 9728,
@@ -457,11 +458,14 @@ class POD2GLB:
     def convert_nodes(self):
         print("[Part 03] Converting nodes...")
         for (nodeIndex, node) in enumerate(self.scene.nodes):
+
             children = [i for (i, node) in enumerate(self.scene.nodes) if node.parentIndex == nodeIndex]
 
             nodeEntry = {
                 "name": node.name
             }
+
+            isMesh = False
 
             if node.animation.positions == None:
                 nodeEntry["translation"] = [0,0,0]
@@ -486,14 +490,26 @@ class POD2GLB:
                 print(f"[Part 03-1] {node.name} has a mesh index.")
                 meshIndex = node.index
                 nodeEntry["mesh"] = meshIndex
+                isMesh = True
+                logger.info(meshIndex)
+                logger.info(self.isSkinned)
                 if node.materialIndex != -1:
                     self.glb.meshes[meshIndex]["primitives"][0]["material"] = node.materialIndex
-            # assume every other node is a bone ig
+                #if meshIndex in self.isSkinned:
+                #    nodeEntry["skin"] = 0
+                #    logger.info("[Part 03-1] Mesh is skinned - add skinIndex.")
+                #    print(nodeEntry["skin"])
 
             # if the node index is -1 it is a root node
             if node.parentIndex == -1:
                 print(f"[Part 03-1] {node.name} is a root node.")
                 self.glb.addRootNodeIndex(nodeIndex)
+
+            # check if node is parented to a bone, and if so consider that a bone
+            if node.parentIndex in self.bones:
+                if isMesh == False:
+                    logger.info("[Part 03-1] Node is probably a bone due to parent being a bone, considering that a bone")
+                    self.bones.append(nodeIndex)
             print(f"[Part 03-2] Now adding {node.name}.")
             self.glb.addNode(nodeEntry)
             # To convert or not to convert
@@ -677,8 +693,10 @@ class POD2GLB:
                 "byteLength": len(mesh.vertexElementData[0]),
             })
             print(f"[DEBUG] Creating bufferView for mesh {meshIndex}, length: {len(mesh.vertexElementData[0])}")
-
+            skinCheck1 = False
+            skinCheck2 = False
             for name in vertexElements:
+
                 if name == "COLOR_0":
                     # COLOR_0 is is R8G8B8A8_UNORM
                     # it is not 4 floats, so adding it
@@ -699,8 +717,18 @@ class POD2GLB:
                     accessorType = "VEC4"
                 elif name == "JOINTS_0":
                     accessorType = "VEC4"
+                    logger.info("Mesh has JOINTS_0")
+                    skinCheck1 = True
                 elif name == "WEIGHTS_0":
                     accessorType = "VEC4"
+                    logger.info("Mesh has WEIGHTS_0.")
+                    if skinCheck1 == True:
+                        logger.info("Mesh has WEIGHTS_0 and JOINTS_0.")
+                        skinCheck2 = True
+
+                if skinCheck2 == True:
+                    logger.info("Mesh is skinned.")
+                    self.isSkinned.append(meshIndex)
 
                 componentType = self.vertex_data_type_to_accessor_data_types \
                     .get(element["dataType"], None)
