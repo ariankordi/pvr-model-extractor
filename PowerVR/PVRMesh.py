@@ -94,6 +94,7 @@ class PVRMesh:
       "dataIndex": dataIndex,
     }
     # You might be asking, PicelBoi, why is this NEEDED? Well, long story short... glTF requires I guess a bit of changes and stuff so gltf applications can read this, so yeah
-    logger.debug(f"{semantic}:" + debuffer(self.vertexElementData[0], stride))
+    logger.debug(f"{semantic}:")
+    logger.debug(debuffer(self.vertexElementData[0], stride))
       
     return EPODErrorCodes.eNoError
