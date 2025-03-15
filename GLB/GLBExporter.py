@@ -129,7 +129,8 @@ class GLBExporter:
       "textures": self.textures,
       "images": self.images,
       "samplers": self.samplers,
-      "animations": self.animations
+      "animations": self.animations,
+      "skins": self.skins
     }
   
   def save(self, path):
