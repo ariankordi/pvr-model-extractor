@@ -495,10 +495,10 @@ class POD2GLB:
                 logger.info(self.isSkinned)
                 if node.materialIndex != -1:
                     self.glb.meshes[meshIndex]["primitives"][0]["material"] = node.materialIndex
-                #if meshIndex in self.isSkinned:
-                #    nodeEntry["skin"] = 0
-                #    logger.info("[Part 03-1] Mesh is skinned - add skinIndex.")
-                #    print(nodeEntry["skin"])
+                if meshIndex in self.isSkinned:
+                    nodeEntry["skin"] = 0
+                    logger.info("[Part 03-1] Mesh is skinned - add skinIndex.")
+                    print(nodeEntry["skin"])
 
             # if the node index is -1 it is a root node
             if node.parentIndex == -1:
@@ -715,6 +715,7 @@ class POD2GLB:
 
                 if name == "TANGENT":
                     accessorType = "VEC4"
+
                 elif name == "JOINTS_0":
                     accessorType = "VEC4"
                     logger.info("Mesh has JOINTS_0")
@@ -792,7 +793,7 @@ def main():
 
     # Optional arguments to specify PVRTexTool paths.
     parser.add_argument("--pvrtextool-path", type=str, help="Path to PVRTexTool.")
-    args = parser.parse_args()
+    args = parser.parse_args(["/home/picelboi/Downloads/MiitomoExtract/asset/model/character/bodyBottomsA/output/bodyBottomsA0048~/bodyBottomsA0048/bodyBottomsA0048Hi.Mdl.pod", "Test/pants.glb"])
 
     global pathto, pathout  # Used when converting textures.
     pathto = args.pod_path

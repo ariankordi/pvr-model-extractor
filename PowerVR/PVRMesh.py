@@ -1,4 +1,7 @@
 from PowerVR.EPOD import *
+import numpy as np
+import logging
+logger = logging.getLogger(__name__)
 
 class EPVRMesh:
   eTriangleList          = 0
@@ -33,6 +36,14 @@ class EPVRMesh:
   class FaceData:
     e16Bit = 3
     e32Bit = 17
+
+def debuffer(data, stride):
+      dedata = np.frombuffer(data, dtype=np.float32)
+      stride = int(stride / 4)
+      assert dedata.size % stride == 0, "oh no! the data is not divisible by the stride... did we assume "
+      dedata = dedata.reshape(-1, stride)
+      return(dedata[:, :3])
+
 
 class PVRMesh:
   def __init__(self):
@@ -82,4 +93,9 @@ class PVRMesh:
       "offset": offset,
       "dataIndex": dataIndex,
     }
+          # You might be asking, PicelBoi, why is this NEEDED? Well, long story short... glTF requires I guess a bit of changes and stuff so gltf applications can read this, so yeah.
+    if semantic == "TANGENT":
+
+      logger.debug(debuffer(self.vertexElementData[0], stride))
+      
     return EPODErrorCodes.eNoError
