@@ -792,7 +792,7 @@ def main():
 
     # Optional arguments to specify PVRTexTool paths.
     parser.add_argument("--pvrtextool-path", type=str, help="Path to PVRTexTool.")
-    args = parser.parse_args(["/home/picelboi/Downloads/MiitomoExtract/asset/model/character/bodyBottomsA/output/bodyBottomsA0048~/bodyBottomsA0048/bodyBottomsA0048Hi.Mdl.pod", "Test/pants.glb"])
+    args = parser.parse_args()
 
     global pathto, pathout  # Used when converting textures.
     pathto = args.pod_path
