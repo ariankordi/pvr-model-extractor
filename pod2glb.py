@@ -652,6 +652,7 @@ class POD2GLB:
 
 
         # Create a matrix out of translation/rotation/scale for inversebindmatrices.
+        # inspired from here https://github.com/KhronosGroup/glTF/issues/1689
         def createMatrix(t, r, s):
             sqx = r[0] * r[0]
             sqy = r[1] * r[1]
@@ -865,8 +866,8 @@ def main():
 
     # Optional arguments to specify PVRTexTool paths.
     parser.add_argument("--pvrtextool-path", type=str, help="Path to PVRTexTool.")
-    args = parser.parse_args(["/home/picelboi/Downloads/MiitomoExtract/asset/model/character/bodyBottomsA/output/bodyBottomsA0048~/bodyBottomsA0048/bodyBottomsA0048Hi.Mdl.pod", "Test/pants.glb", "-e"])
-    #args = parser.parse_args(["/home/picelboi/Downloads/MiitomoExtract/asset/model/character/bodyAll/output/bodyAll0000~/bodyAll0000/bodyAll0000.Mdl.pod", "Test/outfit.glb"])
+    #args = parser.parse_args(["/home/picelboi/Downloads/MiitomoExtract/asset/model/character/bodyBottomsA/output/bodyBottomsA0048~/bodyBottomsA0048/bodyBottomsA0048Hi.Mdl.pod", "Test/pants.glb", "-e"])
+    args = parser.parse_args(["/home/picelboi/Downloads/MiitomoExtract/asset/model/character/bodyAll/output/bodyAll0000~/bodyAll0000/bodyAll0000.Mdl.pod", "Test/outfit.glb"])
 
     global pathto, pathout  # Used when converting textures.
     pathto = args.pod_path
