@@ -693,10 +693,9 @@ class POD2GLB:
                             # NOTE: Assuming that it's all in one vertex buffer...!!!
                 vertexBufferView = self.glb.addBufferView({
                     "buffer": 0,
-                    "byteOffset": self.glb.addData(mesh.vertexElementData[0]),
-                    "byteStride": vertexElements[name]["stride"],
+                    "byteOffset": self.glb.addData(bytes(vertexElements[name]["buffer"])),
                     "target": 34962,  # ARRAY_BUFFER
-                    "byteLength": len(mesh.vertexElementData[0]),
+                    "byteLength": len(bytes(vertexElements[name]["buffer"])),
                 })
 
                 if name == "COLOR_0":
@@ -741,7 +740,7 @@ class POD2GLB:
 
                 accessor_data = {
                     "bufferView": vertexBufferView,
-                    "byteOffset": element["offset"],
+                    "byteOffset": 0,
                     # https://github.com/KhronosGroup/glTF/blob/master/specification/2.0/README.md#accessor-element-size
                     "componentType": componentType,
                     "count": numVertices,
@@ -750,14 +749,7 @@ class POD2GLB:
 
                 # Make bounding box for position.
                 if name == "POSITION" and hasnumpy:
-                    # Import single vertex buffer.
-                    data = np.frombuffer(mesh.vertexElementData[0], dtype=np.float32)
-                    # 4 = sizeof(float)
-                    stride = int(vertexElements["POSITION"]["stride"] / 4)
-                    assert data.size % stride == 0, "oh no! the data is not divisible by the stride... did we assume "
-                    # Reshape into (-1, stride) to process the interleaved data
-                    data = data.reshape(-1, stride)
-                    positions = data[:, :3]
+                    positions = vertexElements[name]["buffer"]
 
                     # get min and max, convert np.array
                     # float32 to list of floats

@@ -48,12 +48,27 @@ class EPVRMesh:
 
 
 
-def debuffer(data, stride, number, type, offset):
+def debuffer(data, stride, number, type, offset, vertices):
       dedata = np.frombuffer(data, dtype=vertextdata2numpydata[type])
-      stride = int(stride / dedata.itemsize)
-      assert dedata.size % stride == 0, "data size not divisble by stride"
-      dedata = dedata.reshape(-1, stride)
-      return(dedata[:, :number])
+      stridee = int(stride / dedata.itemsize)
+      offset = int(offset / dedata.itemsize)
+      assert dedata.size % stridee == 0, "data size not divisble by stride"
+      tempdata = []
+      tempvec = []
+      index = offset
+      extra = 0
+      for x in dedata:
+        if len(tempdata) == vertices:
+          break
+        tempvec.append(float(dedata[index + extra]))
+        if len(tempvec) == number:
+          tempdata.append(tempvec)
+          tempvec = []
+          extra += stridee - number
+        index += 1
+      dedata = tempdata
+      logger.debug(dedata)
+      return(dedata)
 
 
 class PVRMesh:
@@ -98,7 +113,7 @@ class PVRMesh:
     if semantic in self.vertexElements:
       return EPODErrorCodes.eKeyAlreadyExists
     logger.debug(f"{semantic}:")
-    elementdata = debuffer(self.vertexElementData[0], stride, numComponents, type, offset)
+    elementdata = debuffer(self.vertexElementData[0], stride, numComponents, type, offset, self.primitiveData["numVertices"])
     logger.debug(elementdata)
 
     newdata = []
@@ -106,24 +121,50 @@ class PVRMesh:
     if semantic == "TANGENT":
       index = 0
       for x in elementdata:
-        newdata.append(np.array([x[0], x[1], x[2], 1]))
+        newdata.append(np.array([x[0], x[1], x[2], 1], dtype=np.float32))
       index += 1
 
     elif semantic == "JOINTS_0":
       print(self.boneBatches["batches"])
-    else:
-      newdata = elementdata
+      for x in elementdata:
+        joints = []
+        for y in x:
+          checkmate = self.boneBatches["batches"][int(y)]
+          joints.append(checkmate)
 
-    logger.debug(np.asarray(newdata))
+        addZero = 4 - len(x)
+
+        if addZero >= 1:
+          for z in range(addZero):
+            joints.append(0)
+
+        newdata.append(np.array(joints, dtype=np.uint8))
+    elif semantic == "WEIGHTS_0":
+      for x in elementdata:
+        joints = []
+        for y in x:
+          if y > 4:
+            break
+          joints.append(y)
+
+        if 4 - len(x) >= 1:
+          for z in range(4 - len(x)):
+            joints.append(0)
+
+        newdata.append(np.array(joints, dtype=np.float32))
+    else:
+      index = 0
+      for x in elementdata:
+        newdata.append(np.array(x, dtype=np.float32))
+      index += 1
+    logger.debug(np.array(newdata))
 
     self.vertexElements[semantic] = {
       "semantic": semantic,
       "dataType": type,
       "numComponents": numComponents,
-      "stride": stride,
-      "offset": offset,
       "dataIndex": dataIndex,
-      "buffer": np.asarray(newdata)
+      "buffer": np.array(newdata)
     }
       
     return EPODErrorCodes.eNoError
