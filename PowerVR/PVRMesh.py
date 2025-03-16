@@ -143,8 +143,6 @@ class PVRMesh:
       for x in elementdata:
         joints = []
         for y in x:
-          if y > 4:
-            break
           joints.append(y)
 
         if 4 - len(x) >= 1:
@@ -164,6 +162,8 @@ class PVRMesh:
       "dataType": type,
       "numComponents": numComponents,
       "dataIndex": dataIndex,
+      "stride": stride,
+      "offset": offset,
       "buffer": np.array(newdata)
     }
       

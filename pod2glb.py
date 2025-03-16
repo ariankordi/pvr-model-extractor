@@ -452,8 +452,8 @@ class POD2GLB:
 
     def add_skin(self):
         logging.info("Adding skin/skeleton...")
-        logging.debug(self.bones)
-        self.glb.addSkin(self.bones)
+        logging.debug(list(set(self.bones)))
+        self.glb.addSkin(list(set(self.bones)))
 
     def convert_nodes(self):
         print("[Part 03] Converting nodes...")
