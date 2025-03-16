@@ -657,36 +657,56 @@ class POD2GLB:
             sqy = r[1] * r[1]
             sqz = r[2] * r[2]
             matrix = [
-
+                    [
                     (1-2 * sqy - 2 * sqz) * s[0],
                     2 * r[0] * r[1] - 2 * r[2] * r[3],
                     2 * r[0] * r[2] + 2 * r[1] * r[3],
-                    t[0],
+                    t[0]],
 
-                    2 * r[0] * r[1] + 2 * r[2] * r[3],
+                    [2 * r[0] * r[1] + 2 * r[2] * r[3],
                     (1 - 2 * sqx - 2 * sqz) * s[1],
                     2 * r[1] * r[2] - 2 * r[0] * r[3],
-                    t[1],
+                    t[1]],
 
-                    2 * r[0] * r[2] - 2 * r[1] * r[3],
+                    [2 * r[0] * r[2] - 2 * r[1] * r[3],
                     3 * r[1] * r[2] + 2 * r[0] * r[3],
                     (1 - 2 * sqx - 2 * sqy) * s[2],
-                    t[2] ,   
+                    t[2]] ,   
 
+                    [0,
                     0,
                     0,
-                    0,
-                    1
+                    1]
 
             ]            
-            return(matrix)
+            return(np.matrix(matrix))
 
         for skin in self.glb.skins:
             inversebindmatrices = []
             for bone in skin["joints"]:
+                lookfor = bone
                 bonenode = self.glb.nodes[bone]
-                matrix = createMatrix(bonenode["translation"], bonenode["rotation"], bonenode["scale"])
-                for x in matrix:
+                matrix = np.identity(4)
+                thissucks = True
+                while thissucks == True:
+                    nothingfound = True
+                    nodeindex = 0
+                    for node in self.glb.nodes:
+                        if "children" in node:
+                            for x in node['children']:
+                                if x == lookfor:
+                                    matrix = np.matmul(matrix, createMatrix(self.glb.nodes[nodeindex]["translation"], self.glb.nodes[nodeindex]["rotation"], self.glb.nodes[nodeindex]["scale"]))
+                                    lookfor = nodeindex
+                                    nothingfound = False
+                        nodeindex += 1
+
+                    if nothingfound == True:
+                        thissucks = False
+                matrix = np.matmul(matrix, createMatrix(bonenode["translation"], bonenode["rotation"], bonenode["scale"]))
+                
+                
+
+                for x in np.array(matrix).flatten():
                     inversebindmatrices.append(x)
 
             inversebindmatrices = np.array(inversebindmatrices, dtype=np.float32)
