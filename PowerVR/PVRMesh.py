@@ -51,7 +51,7 @@ class EPVRMesh:
 def debuffer(data, stride, number, type, offset):
       dedata = np.frombuffer(data, dtype=vertextdata2numpydata[type])
       stride = int(stride / dedata.itemsize)
-      assert dedata.size % stride == 0, "oh no! the data is not divisible by the stride... did we assume "
+      assert dedata.size % stride == 0, "data size not divisble by stride"
       dedata = dedata.reshape(-1, stride)
       return(dedata[:, :number])
 
