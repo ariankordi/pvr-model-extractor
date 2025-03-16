@@ -682,6 +682,14 @@ class POD2GLB:
             ]            
             return(np.matrix(matrix))
 
+        def IsBoneParentNodeIsAlsoBone(node, joints):
+            if node not in joints:
+                joints.append(node)
+
+            if "children" in self.glb.nodes[node]:
+                for x in self.glb.nodes[node]["children"]:
+                    IsBoneParentNodeIsAlsoBone(x, joints)
+
         for skin in self.glb.skins:
             inversebindmatrices = []
             for bone in skin["joints"]:
@@ -693,6 +701,9 @@ class POD2GLB:
                     nothingfound = True
                     nodeindex = 0
                     for node in self.glb.nodes:
+                        if "children" in bonenode:
+                            if nodeindex in bonenode["children"]:
+                                IsBoneParentNodeIsAlsoBone(nodeindex, skin["joints"])
                         if "children" in node:
                             for x in node['children']:
                                 if x == lookfor:
