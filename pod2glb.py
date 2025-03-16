@@ -684,18 +684,20 @@ class POD2GLB:
             # vertex buffer view
             vertexElements = mesh.vertexElements
 
-            # NOTE: Assuming that it's all in one vertex buffer...!!!
-            vertexBufferView = self.glb.addBufferView({
-                "buffer": 0,
-                "byteOffset": self.glb.addData(mesh.vertexElementData[0]),
-                "byteStride": vertexElements["POSITION"]["stride"],
-                "target": 34962,  # ARRAY_BUFFER
-                "byteLength": len(mesh.vertexElementData[0]),
-            })
+
             print(f"[DEBUG] Creating bufferView for mesh {meshIndex}, length: {len(mesh.vertexElementData[0])}")
             skinCheck1 = False
             skinCheck2 = False
             for name in vertexElements:
+
+                            # NOTE: Assuming that it's all in one vertex buffer...!!!
+                vertexBufferView = self.glb.addBufferView({
+                    "buffer": 0,
+                    "byteOffset": self.glb.addData(mesh.vertexElementData[0]),
+                    "byteStride": vertexElements[name]["stride"],
+                    "target": 34962,  # ARRAY_BUFFER
+                    "byteLength": len(mesh.vertexElementData[0]),
+                })
 
                 if name == "COLOR_0":
                     # COLOR_0 is is R8G8B8A8_UNORM

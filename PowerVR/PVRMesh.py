@@ -3,6 +3,15 @@ import numpy as np
 import logging
 logger = logging.getLogger(__name__)
 
+vertextdata2numpydata = {
+  13: np.int8,  # EPVRMesh.VertexData.eByte
+  10: np.uint8,  # EPVRMesh.VertexData.eUnsignedByte
+  11: np.int16,  # EPVRMesh.VertexData.eShort
+  3: np.uint16,   # EPVRMesh.VertexData.eUnsignedShort
+  17: np.uint32,  # EPVRMesh.VertexData.eUnsignedInt
+  1: np.float32    # EPVRMesh.VertexData.eFloat
+}
+
 class EPVRMesh:
   eTriangleList          = 0
   eIndexedTriangleList   = 1
@@ -37,12 +46,14 @@ class EPVRMesh:
     e16Bit = 3
     e32Bit = 17
 
-def debuffer(data, stride):
-      dedata = np.frombuffer(data, dtype=np.float32)
-      stride = int(stride / 4)
+
+
+def debuffer(data, stride, number, type, offset):
+      dedata = np.frombuffer(data, dtype=vertextdata2numpydata[type])
+      stride = int(stride / dedata.itemsize)
       assert dedata.size % stride == 0, "oh no! the data is not divisible by the stride... did we assume "
       dedata = dedata.reshape(-1, stride)
-      return(dedata[:, :3])
+      return(dedata[:, :number])
 
 
 class PVRMesh:
@@ -83,8 +94,28 @@ class PVRMesh:
     return EPODErrorCodes.eNoError
 
   def AddElement(self, semantic, type, numComponents, stride, offset, dataIndex):
+    fix = True
     if semantic in self.vertexElements:
       return EPODErrorCodes.eKeyAlreadyExists
+    logger.debug(f"{semantic}:")
+    elementdata = debuffer(self.vertexElementData[0], stride, numComponents, type, offset)
+    logger.debug(elementdata)
+
+    newdata = []
+
+    if semantic == "TANGENT":
+      index = 0
+      for x in elementdata:
+        newdata.append(np.array([x[0], x[1], x[2], 1]))
+      index += 1
+
+    elif semantic == "JOINTS_0":
+      print(self.boneBatches["batches"])
+    else:
+      newdata = elementdata
+
+    logger.debug(np.asarray(newdata))
+
     self.vertexElements[semantic] = {
       "semantic": semantic,
       "dataType": type,
@@ -92,9 +123,7 @@ class PVRMesh:
       "stride": stride,
       "offset": offset,
       "dataIndex": dataIndex,
+      "buffer": np.asarray(newdata)
     }
-    # You might be asking, PicelBoi, why is this NEEDED? Well, long story short... glTF requires I guess a bit of changes and stuff so gltf applications can read this, so yeah
-    logger.debug(f"{semantic}:")
-    logger.debug(debuffer(self.vertexElementData[0], stride))
       
     return EPODErrorCodes.eNoError
