@@ -13,6 +13,7 @@ texture_exist = False
 animation_exist = False
 
 class GLBExporter:
+  RootNodeIndex = 0
   def __init__(self):
     self.data = bytes()
     self.asset = {"version": "2.0", "generator": f"PicelBoi POD2GLB", "copyright": "2025 (c) ariankordi, 2025 (c) Imagination Technologies (POD File Format), 2025 (c) PicelBoi, 2018 (c) jaames"}
@@ -39,6 +40,7 @@ class GLBExporter:
 
   def addRootNodeIndex(self, index):
     self.scenes[0]["nodes"].append(index)
+    self.RootNodeIndex = index
 
   def addNode(self, node):
     self.nodes.append(node)
@@ -88,10 +90,12 @@ class GLBExporter:
     self.accessors.append(accessor)
     return index
   
-  def addSkin(self, bones):
+  def addSkin(self, bones, ibm):
     self.skins.append({
       "joints": bones
     })
+
+    return len(self.skins) - 1
 
   def addAnimation(self, sampler, nodeindex, path):
     global animation_exist
@@ -129,7 +133,7 @@ class GLBExporter:
       "textures": self.textures,
       "images": self.images,
       "samplers": self.samplers,
-      "animations": self.animations,
+      #"animations": self.animations,
       "skins": self.skins
     }
   

@@ -49,7 +49,7 @@ print(f"""
 """)
 
 class POD2GLB:
-    bones = []
+    bones = {}
     isSkinned = []
     # Table to resolve GLenum strings to values needed for glTF.
     GLENUM = {
@@ -303,7 +303,7 @@ class POD2GLB:
                 logging.info(f"[Part 04-1] Adding image {texture["name"]}, path {texture["path"]}...")
 
                 if embedimage:
-                    with open(texture["path"], "rb") as img_file:
+                    with open(os.path.join(os.path.dirname(pathout),texture["path"]), "rb") as img_file:
                         image_data = img_file.read()
                     # Create a buffer view for the image
                     buffer_view_index = self.glb.addBufferView({
@@ -457,6 +457,7 @@ class POD2GLB:
 
     def convert_nodes(self):
         print("[Part 03] Converting nodes...")
+        ibms = []
         for (nodeIndex, node) in enumerate(self.scene.nodes):
 
             children = [i for (i, node) in enumerate(self.scene.nodes) if node.parentIndex == nodeIndex]
@@ -496,7 +497,8 @@ class POD2GLB:
                 if node.materialIndex != -1:
                     self.glb.meshes[meshIndex]["primitives"][0]["material"] = node.materialIndex
                 if meshIndex in self.isSkinned:
-                    nodeEntry["skin"] = 0
+                    
+                    nodeEntry["skin"] = self.glb.addSkin(self.bones[meshIndex], self.bones[meshIndex][0])
                     logger.info("[Part 03-1] Mesh is skinned - add skinIndex.")
                     print(nodeEntry["skin"])
 
@@ -505,11 +507,7 @@ class POD2GLB:
                 print(f"[Part 03-1] {node.name} is a root node.")
                 self.glb.addRootNodeIndex(nodeIndex)
 
-            # check if node is parented to a bone, and if so consider that a bone
-            if node.parentIndex in self.bones:
-                if isMesh == False:
-                    logger.info("[Part 03-1] Node is probably a bone due to parent being a bone, considering that a bone")
-                    self.bones.append(nodeIndex)
+            
             print(f"[Part 03-2] Now adding {node.name}.")
             self.glb.addNode(nodeEntry)
             # To convert or not to convert
@@ -650,8 +648,64 @@ class POD2GLB:
                 self.glb.addAnimation(translationSampler, nodeIndex, "translation")
                 self.glb.addAnimation(rotationSampler, nodeIndex, "rotation")
                 self.glb.addAnimation(scaleSampler, nodeIndex, "scale")
+        
 
-        self.add_skin()
+
+        # Create a matrix out of translation/rotation/scale for inversebindmatrices.
+        def createMatrix(t, r, s):
+            sqx = r[0] * r[0]
+            sqy = r[1] * r[1]
+            sqz = r[2] * r[2]
+            matrix = [
+
+                    (1-2 * sqy - 2 * sqz) * s[0],
+                    2 * r[0] * r[1] - 2 * r[2] * r[3],
+                    2 * r[0] * r[2] + 2 * r[1] * r[3],
+                    t[0],
+
+                    2 * r[0] * r[1] + 2 * r[2] * r[3],
+                    (1 - 2 * sqx - 2 * sqz) * s[1],
+                    2 * r[1] * r[2] - 2 * r[0] * r[3],
+                    t[1],
+
+                    2 * r[0] * r[2] - 2 * r[1] * r[3],
+                    3 * r[1] * r[2] + 2 * r[0] * r[3],
+                    (1 - 2 * sqx - 2 * sqy) * s[2],
+                    t[2] ,   
+
+                    0,
+                    0,
+                    0,
+                    1
+
+            ]            
+            return(matrix)
+
+        for skin in self.glb.skins:
+            inversebindmatrices = []
+            for bone in skin["joints"]:
+                bonenode = self.glb.nodes[bone]
+                matrix = createMatrix(bonenode["translation"], bonenode["rotation"], bonenode["scale"])
+                for x in matrix:
+                    inversebindmatrices.append(x)
+
+            inversebindmatrices = np.array(inversebindmatrices, dtype=np.float32)
+            logger.debug(inversebindmatrices)
+            skin["inverseBindMatrices"] = self.glb.addAccessor({
+                "bufferView": self.glb.addBufferView({
+                    "buffer": 0,
+                    "byteOffset": self.glb.addData(bytes(inversebindmatrices)),
+                    "byteLength": len(inversebindmatrices) * inversebindmatrices.itemsize,
+                    "target": 34963
+                }),
+                "byteOffset": 0,
+                "componentType": 5126,
+                "count": len(skin["joints"]),
+                "type": "MAT4"
+            })
+            print(skin["inverseBindMatrices"])
+            print("e")
+
 
     def convert_meshes(self):
         logging.info("[Part 02] Converting meshes...")
@@ -676,10 +730,7 @@ class POD2GLB:
                 "type": "SCALAR"
             })
 
-            for x in mesh.boneBatches["batches"]:
-                if x != 0:
-                    if x not in self.bones:
-                        self.bones.append(x)
+            
 
             # vertex buffer view
             vertexElements = mesh.vertexElements
@@ -728,9 +779,7 @@ class POD2GLB:
                         logger.info("Mesh has WEIGHTS_0 and JOINTS_0.")
                         skinCheck2 = True
 
-                if skinCheck2 == True:
-                    logger.info("Mesh is skinned.")
-                    self.isSkinned.append(meshIndex)
+
 
                 componentType = self.vertex_data_type_to_accessor_data_types \
                     .get(element["dataType"], None)
@@ -760,6 +809,15 @@ class POD2GLB:
                 print(f"[DEBUG] Creating accessor {accessorIndex} for attribute {name}")
                 attributes[name] = accessorIndex
 
+                if skinCheck2 == True:
+                    logger.info("Mesh is skinned.")
+                    self.isSkinned.append(meshIndex)
+                    self.bones[meshIndex] = []
+                    for x in mesh.boneBatches["batches"]:
+                        if x != 0:
+                            if x not in self.bones:
+                                self.bones[meshIndex].append(x)
+
             # POD meshes only have one primitive?
             # https://github.com/KhronosGroup/glTF/blob/master/specification/2.0/README.md#primitive
             print("[Part 02-1] Adding mesh...")
@@ -787,7 +845,8 @@ def main():
 
     # Optional arguments to specify PVRTexTool paths.
     parser.add_argument("--pvrtextool-path", type=str, help="Path to PVRTexTool.")
-    args = parser.parse_args(["/home/picelboi/Downloads/MiitomoExtract/asset/model/character/bodyBottomsA/output/bodyBottomsA0048~/bodyBottomsA0048/bodyBottomsA0048Hi.Mdl.pod", "Test/pants.glb"])
+    args = parser.parse_args(["/home/picelboi/Downloads/MiitomoExtract/asset/model/character/bodyBottomsA/output/bodyBottomsA0048~/bodyBottomsA0048/bodyBottomsA0048Hi.Mdl.pod", "Test/pants.glb", "-e"])
+    #args = parser.parse_args(["/home/picelboi/Downloads/MiitomoExtract/asset/model/character/bodyAll/output/bodyAll0000~/bodyAll0000/bodyAll0000.Mdl.pod", "Test/outfit.glb"])
 
     global pathto, pathout  # Used when converting textures.
     pathto = args.pod_path

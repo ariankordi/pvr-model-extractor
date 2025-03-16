@@ -129,8 +129,9 @@ class PVRMesh:
       for x in elementdata:
         joints = []
         for y in x:
-          checkmate = self.boneBatches["batches"][int(y)]
-          joints.append(checkmate)
+          if len(x) <= 4:
+            checkmate = int(y)
+            joints.append(checkmate)
 
         addZero = 4 - len(x)
 

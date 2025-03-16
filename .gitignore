@@ -2,6 +2,8 @@
 *.pod
 *.pvr
 *.glb
+*.gltf
+*.xml
 *.png
 *.ktx
 *.bin
@@ -144,3 +146,5 @@ Mods/Hats/headwear0304.zip
 .gitignore
 Mods/Hats/PBHardHat/headwear0304/headwear0304.Mdl_model.xml
 Mods/
+Test/PicelBoi.gltf
+Test/pantsout.gltf
