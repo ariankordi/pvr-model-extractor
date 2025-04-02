@@ -449,12 +449,6 @@ class POD2GLB:
 
                 self.glb.addMaterial(PODMaterial)
 
-
-    def add_skin(self):
-        logging.info("Adding skin/skeleton...")
-        logging.debug(list(set(self.bones)))
-        self.glb.addSkin(list(set(self.bones)))
-
     def convert_nodes(self):
         print("[Part 03] Converting nodes...")
         ibms = []
@@ -878,7 +872,8 @@ def main():
     # Optional arguments to specify PVRTexTool paths.
     parser.add_argument("--pvrtextool-path", type=str, help="Path to PVRTexTool.")
     #args = parser.parse_args(["/home/picelboi/Downloads/MiitomoExtract/asset/model/character/bodyBottomsA/output/bodyBottomsA0048~/bodyBottomsA0048/bodyBottomsA0048Hi.Mdl.pod", "Test/pants.glb", "-e"])
-    args = parser.parse_args(["/home/picelboi/Downloads/MiitomoExtract/asset/model/character/bodyAll/output/bodyAll0000~/bodyAll0000/bodyAll0000.Mdl.pod", "Test/outfit.glb"])
+    #args = parser.parse_args(["/home/picelboi/Downloads/MiitomoExtract/asset/model/character/bodyShoes/output/bodyShoes0008~/bodyShoes0008/bodyShoes0008.Mdl.pod", "Outfits/TLife/body055 (Business Shirt)/shoes.glb"])
+    args = parser.parse_args()
 
     global pathto, pathout  # Used when converting textures.
     pathto = args.pod_path

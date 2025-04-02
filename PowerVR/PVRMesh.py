@@ -109,63 +109,65 @@ class PVRMesh:
     return EPODErrorCodes.eNoError
 
   def AddElement(self, semantic, type, numComponents, stride, offset, dataIndex):
-    fix = True
-    if semantic in self.vertexElements:
-      return EPODErrorCodes.eKeyAlreadyExists
-    logger.debug(f"{semantic}:")
-    elementdata = debuffer(self.vertexElementData[0], stride, numComponents, type, offset, self.primitiveData["numVertices"])
-    logger.debug(elementdata)
+    if not semantic == "COLOR_0":
+      if semantic in self.vertexElements:
+        return EPODErrorCodes.eKeyAlreadyExists
+      logger.debug(f"{semantic}:")
+      # COLOR_0 not supported yet
+    
+      elementdata = debuffer(self.vertexElementData[0], stride, numComponents, type, offset, self.primitiveData["numVertices"])
+      logger.debug(elementdata)
 
-    newdata = []
+      newdata = []
 
-    if semantic == "TANGENT":
-      index = 0
-      for x in elementdata:
-        newdata.append(np.array([x[0], x[1], x[2], 1], dtype=np.float32))
-      index += 1
+      if semantic == "TANGENT":
+        index = 0
+        for x in elementdata:
+          newdata.append(np.array([x[0], x[1], x[2], 1], dtype=np.float32))
+        index += 1
 
-    elif semantic == "JOINTS_0":
-      print(self.boneBatches["batches"])
-      for x in elementdata:
-        joints = []
-        for y in x:
-          if len(x) <= 4:
-            checkmate = int(y)
-            joints.append(checkmate)
+      elif semantic == "JOINTS_0":
+        print(self.boneBatches["batches"])
+        for x in elementdata:
+          joints = []
+          for y in x:
+            if len(x) <= 4:
+              checkmate = int(y)
+              joints.append(checkmate)
 
-        addZero = 4 - len(x)
+          addZero = 4 - len(x)
 
-        if addZero >= 1:
-          for z in range(addZero):
-            joints.append(0)
+          if addZero >= 1:
+            for z in range(addZero):
+              joints.append(0)
 
-        newdata.append(np.array(joints, dtype=np.uint8))
-    elif semantic == "WEIGHTS_0":
-      for x in elementdata:
-        joints = []
-        for y in x:
-          joints.append(y)
+          newdata.append(np.array(joints, dtype=np.uint8))
+      elif semantic == "WEIGHTS_0":
+        for x in elementdata:
+          joints = []
+          for y in x:
+            joints.append(y)
 
-        if 4 - len(x) >= 1:
-          for z in range(4 - len(x)):
-            joints.append(0)
+          if 4 - len(x) >= 1:
+            for z in range(4 - len(x)):
+              joints.append(0)
 
-        newdata.append(np.array(joints, dtype=np.float32))
-    else:
-      index = 0
-      for x in elementdata:
-        newdata.append(np.array(x, dtype=np.float32))
-      index += 1
-    logger.debug(np.array(newdata))
+          newdata.append(np.array(joints, dtype=np.float32))
+      else:
+        index = 0
+        for x in elementdata:
+          newdata.append(np.array(x, dtype=np.float32))
+        index += 1
+      logger.debug(np.array(newdata))
 
-    self.vertexElements[semantic] = {
-      "semantic": semantic,
-      "dataType": type,
-      "numComponents": numComponents,
-      "dataIndex": dataIndex,
-      "stride": stride,
-      "offset": offset,
-      "buffer": np.array(newdata)
-    }
+      self.vertexElements[semantic] = {
+        "semantic": semantic,
+        "dataType": type,
+        "numComponents": numComponents,
+        "dataIndex": dataIndex,
+        "stride": stride,
+        "offset": offset,
+        "buffer": np.array(newdata)
+      }
       
-    return EPODErrorCodes.eNoError
+      return EPODErrorCodes.eNoError
