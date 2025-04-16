@@ -73,12 +73,9 @@ class GLBExporter:
   def addData(self, data):
     # Calculate the current offset
     offset = len(self.data)
-    # Pad current data to 4-byte boundary
-    padding = (4 - (offset % 4)) % 4
-    self.data += bytes(padding)
     # Add the new data
     self.data += data
-    return offset + padding
+    return offset
   
   def addBufferView(self, bufferView):
     index = len(self.bufferViews)
@@ -139,14 +136,16 @@ class GLBExporter:
   
   def save(self, path):
     with open(path, "wb") as f:
+      # pad binary data with null bytes
+      self.data += bytes((4 - len(self.data) % 4) % 4)
+
       self.buffers.append({
         "byteLength": len(self.data)
       })
+
       json_data = json.dumps(self.buildJSON())
       # pad json data with spaces
       json_data += " " * (4 - len(json_data) % 4)
-      # pad binary data with null bytes
-      self.data += bytes((4 - len(self.data) % 4))
       # write fileheader
       f.write(pack("<4sII", b'glTF', 2, len(json_data) + len(self.data) + 28))
       # write json chunk
