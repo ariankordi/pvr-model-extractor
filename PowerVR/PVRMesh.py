@@ -1,16 +1,4 @@
 from PowerVR.EPOD import *
-import numpy as np
-import logging
-logger = logging.getLogger(__name__)
-
-vertextdata2numpydata = {
-  13: np.int8,  # EPVRMesh.VertexData.eByte
-  10: np.uint8,  # EPVRMesh.VertexData.eUnsignedByte
-  11: np.int16,  # EPVRMesh.VertexData.eShort
-  3: np.uint16,   # EPVRMesh.VertexData.eUnsignedShort
-  17: np.uint32,  # EPVRMesh.VertexData.eUnsignedInt
-  1: np.float32    # EPVRMesh.VertexData.eFloat
-}
 
 class EPVRMesh:
   eTriangleList          = 0
@@ -41,35 +29,32 @@ class EPVRMesh:
     eUnsignedInt       = 17
     eABGR              = 18
     eCustom            = 1000
-  
+
   class FaceData:
     e16Bit = 3
     e32Bit = 17
 
-
-
-def debuffer(data, stride, number, type, offset, vertices):
-      dedata = np.frombuffer(data, dtype=vertextdata2numpydata[type])
-      stridee = int(stride / dedata.itemsize)
-      offset = int(offset / dedata.itemsize)
-      assert dedata.size % stridee == 0, "data size not divisble by stride"
-      tempdata = []
-      tempvec = []
-      index = offset
-      extra = 0
-      for x in dedata:
-        if len(tempdata) == vertices:
-          break
-        tempvec.append(float(dedata[index + extra]))
-        if len(tempvec) == number:
-          tempdata.append(tempvec)
-          tempvec = []
-          extra += stridee - number
-        index += 1
-      dedata = tempdata
-      logger.debug(dedata)
-      return(dedata)
-
+# Mapping of VertexData enum values to size in bytes per component.
+VERTEX_DATA_TYPE_SIZE = {
+    1: 4,   # eFloat
+    2: 4,   # eInt
+    3: 2,   # eUnsignedShort
+    4: 4,   # eRGBA
+    5: 4,   # eARGB
+    6: 4,   # eD3DCOLOR
+    7: 4,   # eUBYTE4
+    8: 4,   # eDEC3N
+    9: 4,   # eFixed16_16
+    10: 1,  # eUnsignedByte
+    11: 2,  # eShort
+    12: 2,  # eShortNorm
+    13: 1,  # eByte
+    14: 1,  # eByteNorm
+    15: 1,  # eUnsignedByteNorm
+    16: 2,  # eUnsignedShortNorm
+    17: 4,  # eUnsignedInt
+    18: 4   # eABGR
+}
 
 class PVRMesh:
   def __init__(self):
@@ -97,11 +82,11 @@ class PVRMesh:
       "indexType": EPVRMesh.FaceData.e16Bit,
       "data": None
 		}
-  
+
   def AddData(self, data):
     self.vertexElementData.append(data)
     return len(self.vertexElementData) - 1
-  
+
   def AddFaces(self, data, type):
     self.faces["indexType"] = type
     self.faces["data"] = data
@@ -109,65 +94,53 @@ class PVRMesh:
     return EPODErrorCodes.eNoError
 
   def AddElement(self, semantic, type, numComponents, stride, offset, dataIndex):
-    if not semantic == "COLOR_0":
-      if semantic in self.vertexElements:
-        return EPODErrorCodes.eKeyAlreadyExists
-      logger.debug(f"{semantic}:")
-      # COLOR_0 not supported yet
-    
-      elementdata = debuffer(self.vertexElementData[0], stride, numComponents, type, offset, self.primitiveData["numVertices"])
-      logger.debug(elementdata)
+    if semantic in self.vertexElements:
+      return EPODErrorCodes.eKeyAlreadyExists
+    self.vertexElements[semantic] = {
+      "semantic": semantic,
+      "dataType": type,
+      "numComponents": numComponents,
+      "stride": stride,
+      "offset": offset,
+      "dataIndex": dataIndex,
+    }
+    return EPODErrorCodes.eNoError
 
-      newdata = []
+  def DeinterleaveAttributes(self):
+    """
+    Deinterleaves vertex attributes from a single vertex buffer into separate binary buffers.
 
-      if semantic == "TANGENT":
-        index = 0
-        for x in elementdata:
-          newdata.append(np.array([x[0], x[1], x[2], 1], dtype=np.float32))
-        index += 1
+    Args:
+        self: A PVRMesh object with vertexElementData and vertexElements.
 
-      elif semantic == "JOINTS_0":
-        print(self.boneBatches["batches"])
-        for x in elementdata:
-          joints = []
-          for y in x:
-            if len(x) <= 4:
-              checkmate = int(y)
-              joints.append(checkmate)
+    Returns:
+        Dictionary mapping attribute names (e.g., "POSITION") to raw binary buffers.
+    """
+    vertex_blob = self.vertexElementData[0]
+    num_vertices = self.primitiveData["numVertices"]
+    vertex_elements = self.vertexElements
 
-          addZero = 4 - len(x)
+    separated_buffers = {}
 
-          if addZero >= 1:
-            for z in range(addZero):
-              joints.append(0)
+    for attr_name, attr in vertex_elements.items():
+        offset = attr["offset"]
+        stride = attr["stride"]
+        num_components = attr["numComponents"]
+        data_type = attr["dataType"]
 
-          newdata.append(np.array(joints, dtype=np.uint8))
-      elif semantic == "WEIGHTS_0":
-        for x in elementdata:
-          joints = []
-          for y in x:
-            joints.append(y)
+        if data_type not in VERTEX_DATA_TYPE_SIZE:
+            raise ValueError(f"Unhandled vertex data type: {data_type}")
 
-          if 4 - len(x) >= 1:
-            for z in range(4 - len(x)):
-              joints.append(0)
+        component_size = VERTEX_DATA_TYPE_SIZE[data_type]
+        attr_size = component_size * num_components
 
-          newdata.append(np.array(joints, dtype=np.float32))
-      else:
-        index = 0
-        for x in elementdata:
-          newdata.append(np.array(x, dtype=np.float32))
-        index += 1
-      logger.debug(np.array(newdata))
+        output = bytearray()
 
-      self.vertexElements[semantic] = {
-        "semantic": semantic,
-        "dataType": type,
-        "numComponents": numComponents,
-        "dataIndex": dataIndex,
-        "stride": stride,
-        "offset": offset,
-        "buffer": np.array(newdata)
-      }
-      
-      return EPODErrorCodes.eNoError
+        for i in range(num_vertices):
+            start = i * stride + offset
+            end = start + attr_size
+            output.extend(vertex_blob[start:end])
+
+        separated_buffers[attr_name] = bytes(output)
+
+    return separated_buffers

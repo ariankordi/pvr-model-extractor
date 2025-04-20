@@ -12,10 +12,12 @@ import argparse
 import math
 import logging
 import coloredlogs
-logger = logging.getLogger(__name__)
-coloredlogs.install(level='DEBUG')
-# Matrix decompose
+import struct  # For convert_attribute
 import glm
+
+logger = logging.getLogger(__name__)
+coloredlogs.install(level="DEBUG")
+# Matrix decompose
 
 # numpy is only needed for calculating bounding box
 hasnumpy = False
@@ -47,6 +49,71 @@ print(f"""
 -----------------------------------------------------------------------------------
 
 """)
+
+
+def align_to_4(data):
+    """Pads byte string to ensure 4-byte alignment."""
+    padding = (4 - (len(data) % 4)) % 4
+    if padding:
+        data += b'\x00' * padding
+    return data
+
+
+def convert_attribute(
+    semantic,
+    raw_bytes,
+    component_type,
+    num_components,
+    vertex_count,
+):
+    """
+    Pads or rewrites attribute data to match glTF accessor spec for given semantic.
+
+    Args:
+        semantic: The attribute semantic (supported: TANGENT, JOINTS_0, WEIGHTS_0).
+        raw_bytes: The binary data for the attribute.
+        component_type: glTF component type (e.g., 5126 for FLOAT).
+        num_components: Number of components per vertex in original.
+        vertex_count: Total number of vertices.
+
+    Returns:
+        A tuple of (new_bytes, new_component_type, new_num_components)
+    """
+
+    # Mapping of glTF types to sizes.
+    type_size_map = {
+        5126: 4,      # FLOAT
+        5123: 2,      # UNSIGNED_SHORT
+        5121: 1,       # UNSIGNED_BYTE
+    }
+
+    original_size = type_size_map[component_type]
+
+    # Pad tangents to vec4 with 1.0 (handedness).
+    if semantic == "TANGENT" and num_components == 4:
+        return raw_bytes, component_type, num_components  # Already compliant.
+    if semantic == "TANGENT" and num_components == 3:
+        padded = bytearray()
+        for i in range(vertex_count):
+            start = i * 3 * 4  # 4 = sizeof(float)
+            padded.extend(raw_bytes[start:start + 3 * 4])  # 4 = sizeof(float)
+            padded.extend(struct.pack("<f", 1.0))  # Add handedness.
+        return bytes(padded), component_type, 4
+
+    # Pad joints and weights to vec4.
+    if semantic in ("JOINTS_0", "WEIGHTS_0") and num_components == 4:
+        return raw_bytes, component_type, num_components  # Skip conversion.
+    if semantic in ("JOINTS_0", "WEIGHTS_0") and num_components < 4:
+        padded = bytearray()
+        for i in range(vertex_count):
+            start = i * num_components * original_size
+            padded.extend(raw_bytes[start:start + num_components * original_size])
+            # pad with zero bytes for missing components
+            pad_len = (4 - num_components) * original_size
+            padded.extend(b'\x00' * pad_len)
+        return bytes(padded), component_type, 4
+
+    return raw_bytes, component_type, num_components
 
 class POD2GLB:
     bones = {}
@@ -303,7 +370,7 @@ class POD2GLB:
                 logging.info(f"[Part 04-1] Adding image {texture["name"]}, path {texture["path"]}...")
 
                 if embedimage:
-                    with open(os.path.join(os.path.dirname(pathout),texture["path"]), "rb") as img_file:
+                    with open(os.path.join(os.path.dirname(pathout), texture["path"]), "rb") as img_file:
                         image_data = img_file.read()
                     # Create a buffer view for the image
                     buffer_view_index = self.glb.addBufferView({
@@ -756,56 +823,40 @@ class POD2GLB:
                 "type": "SCALAR"
             })
 
-            
-
             # vertex buffer view
             vertexElements = mesh.vertexElements
-
+            deinterleaved = mesh.DeinterleaveAttributes()
+            # above returns { "POSITION": bytes, ... }
 
             print(f"[DEBUG] Creating bufferView for mesh {meshIndex}, length: {len(mesh.vertexElementData[0])}")
-            skinCheck1 = False
-            skinCheck2 = False
-            for name in vertexElements:
+            hasJoints = False
+            hasWeights = False
 
-                            # NOTE: Assuming that it's all in one vertex buffer...!!!
+            for name, element in vertexElements.items():
+                # NOTE: Assuming that it's all in one vertex buffer.
+                """
                 vertexBufferView = self.glb.addBufferView({
                     "buffer": 0,
-                    "byteOffset": self.glb.addData(bytes(vertexElements[name]["buffer"])),
+                    "byteOffset": self.glb.addData(mesh.vertexElementData[0]),
+                    "byteStride": vertexElements["POSITION"]["stride"],
                     "target": 34962,  # ARRAY_BUFFER
-                    "byteLength": len(bytes(vertexElements[name]["buffer"])),
+                    "byteLength": len(mesh.vertexElementData[0]),
                 })
+                """
 
-                if name == "COLOR_0":
-                    # COLOR_0 is is R8G8B8A8_UNORM
-                    # it is not 4 floats, so adding it
-                    # will not work and cause "accessor
-                    # does not fit referenced bufferView..."
-                    print("[DEBUG] Model has COLOR_0 attribute. This is not supported, so it will be skipped.")
-                    continue
+                print(f"[DEBUG] Creating bufferView for mesh {meshIndex}, length: {len(mesh.vertexElementData[0])}")
 
                 element = vertexElements[name]
-                accessorType = self.num_components_to_accessor_types \
-                    .get(element["numComponents"], None)
-                if accessorType is None:
-                    raise NotImplementedError(f"Don't have glTF accessor data type for number of components: {element["numComponents"]}")
 
-                # Casually define type per vertex element name.
-
-                if name == "TANGENT":
-                    accessorType = "VEC4"
-
-                elif name == "JOINTS_0":
-                    accessorType = "VEC4"
-                    logger.info("Mesh has JOINTS_0")
-                    skinCheck1 = True
+                # Check for joints/weights semantics.
+                if name == "JOINTS_0":
+                    logger.info("Mesh has JOINTS_0.")
+                    hasJoints = True
                 elif name == "WEIGHTS_0":
-                    accessorType = "VEC4"
                     logger.info("Mesh has WEIGHTS_0.")
-                    if skinCheck1 == True:
+                    if hasJoints:
                         logger.info("Mesh has WEIGHTS_0 and JOINTS_0.")
-                        skinCheck2 = True
-
-
+                        hasWeights = True
 
                 componentType = self.vertex_data_type_to_accessor_data_types \
                     .get(element["dataType"], None)
@@ -813,18 +864,46 @@ class POD2GLB:
                 if componentType is None:
                     raise NotImplementedError(f"Don't have glTF accessor type for corresponding EPVR vertex data type: {element["dataType"]}")
 
+                # Create per-attribute bufferView using deinterleaved data
+                raw_bytes = align_to_4(deinterleaved[name])
+
+                numComponents = element["numComponents"]
+
+                raw_bytes, componentType, numComponents = convert_attribute(
+                    name, raw_bytes, componentType, numComponents, numVertices
+                )
+
+                accessorType = self.num_components_to_accessor_types \
+                    .get(numComponents, None)
+                if accessorType is None:
+                    raise NotImplementedError(f"Don't have glTF accessor data type for number of components: {numComponents}")
+
+                vertexBufferView = self.glb.addBufferView({
+                    "buffer": 0,
+                    "byteOffset": self.glb.addData(raw_bytes),
+                    "byteLength": len(raw_bytes),
+                    "target": 34962  # ARRAY_BUFFER
+                })
+
+                # Create accessor for single attribute (no stride/offset).
                 accessor_data = {
                     "bufferView": vertexBufferView,
                     "byteOffset": 0,
-                    # https://github.com/KhronosGroup/glTF/blob/master/specification/2.0/README.md#accessor-element-size
                     "componentType": componentType,
                     "count": numVertices,
-                    "type": accessorType
+                    "type": accessorType,
                 }
 
                 # Make bounding box for position.
                 if name == "POSITION" and hasnumpy:
-                    positions = vertexElements[name]["buffer"]
+                    # Import single vertex buffer.
+                    data = np.frombuffer(mesh.vertexElementData[0], dtype=np.float32)
+                    # 4 = sizeof(float)
+                    stride = int(vertexElements["POSITION"]["stride"] / 4)
+                    assert data.size % stride == 0, f"Position data is not divisible by stride. Size: {data.size}"
+                    # Reshape into (-1, stride) to process the interleaved data
+                    data = data.reshape(-1, stride)
+                    positions = data[:, :3]
 
                     # get min and max, convert np.array
                     # float32 to list of floats
@@ -835,7 +914,7 @@ class POD2GLB:
                 print(f"[DEBUG] Creating accessor {accessorIndex} for attribute {name}")
                 attributes[name] = accessorIndex
 
-                if skinCheck2 == True:
+                if hasWeights:
                     logger.info("Mesh is skinned.")
                     self.isSkinned.append(meshIndex)
                     self.bones[meshIndex] = []
@@ -880,6 +959,7 @@ def main():
     pathout = args.glb_path
 
     # Set and PVRTexTool paths.
+    global PVR_TEX_TOOL_PATH
     if args.pvrtextool_path:
         PVR_TEX_TOOL_PATH = args.pvrtextool_path
 
