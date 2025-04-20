@@ -1,7 +1,6 @@
 import PIL.Image
 from PowerVR.PVRPODLoader import PVRPODLoader
 from GLB.GLBExporter import GLBExporter
-from PowerVR.PVRMesh import EPVRMesh
 from xml.etree import ElementTree as etree
 from os import path
 import os
@@ -13,7 +12,6 @@ import math
 import logging
 import coloredlogs
 import struct  # For convert_attribute
-import glm
 
 logger = logging.getLogger(__name__)
 coloredlogs.install(level="DEBUG")
@@ -51,14 +49,13 @@ print(f"""
 """)
 
 
+# Attribute conversion.
 def align_to_4(data):
     """Pads byte string to ensure 4-byte alignment."""
     padding = (4 - (len(data) % 4)) % 4
     if padding:
         data += b'\x00' * padding
     return data
-
-
 def convert_attribute(
     semantic,
     raw_bytes,
@@ -114,6 +111,44 @@ def convert_attribute(
         return bytes(padded), component_type, 4
 
     return raw_bytes, component_type, num_components
+
+# Matrix helpers.
+def matrix_from_trs_np(translation, rotation, scale):
+    """
+    Build a row‑major 4×4 affine matrix from TRS.
+      - translation: [tx,ty,tz]
+      - rotation:    [x,y,z,w] quaternion
+      - scale:       [sx,sy,sz]
+    """
+    x, y, z, w = rotation
+    sx, sy, sz = scale
+    tx, ty, tz = translation
+
+    # quaternion → 3×3 rotation
+    xx, yy, zz = x * x, y * y, z * z
+    xy, xz, yz = x * y, x * z, y * z
+    wx, wy, wz = w * x, w * y, w * z
+
+    R = np.array([
+        [1 - 2 * (yy + zz), 2 * (xy - wz), 2 * (xz + wy)],
+        [2 * (xy + wz), 1 - 2 * (xx + zz), 2 * (yz - wx)],
+        [2 * (xz - wy), 2 * (yz + wx), 1 - 2 * (xx + yy)]
+    ], dtype=np.float64)
+
+    # apply scale: scale each column of R
+    R *= np.array(scale)[None, :]
+
+    M = np.eye(4, dtype=np.float64)
+    M[:3, :3] = R
+    M[:3, 3] = translation
+    return M
+
+def flatten_mat4_col_major(mat4):
+    """
+    Turn a 4×4 numpy matrix (row‑major) into a list of 16 floats in column‑major order.
+    """
+    return mat4.T.astype(np.float32).reshape(-1).tolist()
+
 
 class POD2GLB:
     bones = {}
@@ -516,288 +551,155 @@ class POD2GLB:
                 self.glb.addMaterial(PODMaterial)
 
     def convert_nodes(self):
-        print("[Part 03] Converting nodes...")
-        ibms = []
-        for (nodeIndex, node) in enumerate(self.scene.nodes):
+        logger.info("[Part 03] Converting nodes...")
+        parent_map = {}
 
-            children = [i for (i, node) in enumerate(self.scene.nodes) if node.parentIndex == nodeIndex]
+        # Create nodes.
+        for idx, node in enumerate(self.scene.nodes):
+            children = [i for i, n in enumerate(self.scene.nodes) if n.parentIndex == idx]
+            parent_map[idx] = node.parentIndex
 
-            nodeEntry = {
-                "name": node.name
+            # fallback TRS
+            t = node.animation.positions.tolist() if node.animation.positions is not None else [0, 0, 0]
+            r = node.animation.rotations[:4].tolist() if node.animation.rotations is not None else [0, 0, 0, 1]
+            s = node.animation.scales[:3].tolist() if node.animation.scales is not None else [1, 1, 1]
+
+            glb_node = {
+                "name": node.name,
+                "translation": t,
+                "rotation": r,  # [x,y,z,w]
+                "scale": s,
+                # "parentIndex": node.parentIndex
             }
+            if children:
+                glb_node["children"] = children
 
-            isMesh = False
-
-            if node.animation.positions == None:
-                nodeEntry["translation"] = [0,0,0]
-            else:
-                nodeEntry["translation"] = node.animation.positions.tolist()
-
-            if node.animation.scales == None:
-                nodeEntry["scale"] = [1,1,1]
-            else:
-                nodeEntry["scale"] = node.animation.scales[0:3].tolist()
-
-            if node.animation.rotations == None:
-                nodeEntry["rotation"] = [1,0,0,0]
-            else:    
-                nodeEntry["rotation"] = node.animation.rotations[0:4].tolist()
-
-            if children:  # skip if it is empty array
-                nodeEntry["children"] = children
-
-            # if the node has a mesh index
+            # attach mesh & material
             if node.index != -1:
-                print(f"[Part 03-1] {node.name} has a mesh index.")
-                meshIndex = node.index
-                nodeEntry["mesh"] = meshIndex
-                isMesh = True
-                logger.info(meshIndex)
-                logger.info(self.isSkinned)
+                logger.info(f"[Part 03-1] {node.name} has a mesh index.")
+                glb_node["mesh"] = node.index
                 if node.materialIndex != -1:
-                    self.glb.meshes[meshIndex]["primitives"][0]["material"] = node.materialIndex
-                if meshIndex in self.isSkinned:
-                    
-                    nodeEntry["skin"] = self.glb.addSkin(self.bones[meshIndex], self.bones[meshIndex][0])
-                    logger.info("[Part 03-1] Mesh is skinned - add skinIndex.")
-                    print(nodeEntry["skin"])
+                    prim = self.glb.meshes[node.index]["primitives"][0]
+                    prim["material"] = node.materialIndex
+                if node.index in self.isSkinned:
+                    skin_idx = self.glb.addSkin({"joints": self.bones[node.index]})
+                    glb_node["skin"] = skin_idx
 
-            # if the node index is -1 it is a root node
             if node.parentIndex == -1:
-                print(f"[Part 03-1] {node.name} is a root node.")
-                self.glb.addRootNodeIndex(nodeIndex)
+                logger.info(f"[Part 03-1] {node.name} is a root node.")
+                self.glb.addRootNodeIndex(idx)
 
-            
-            print(f"[Part 03-2] Now adding {node.name}.")
-            self.glb.addNode(nodeEntry)
-            # To convert or not to convert
-            if node.animation.matrices is not None:
-                print(f"Converting matrix animation data for: {node.name}")
-                print(node.animation.matrices)
-                keyframes = []
-                matrix = node.animation.matrices.tolist()
-                print(matrix)
-                matrixIndex = 0
-                for x in range(len(matrix)):
-                    matrixIndex = matrixIndex + 1
-                    if (nodeIndex + 1) % 16:
-                        translation = glm.vec3()
-                        rotation = glm.quat()
-                        scale = glm.vec3()
-                        skew = glm.vec3()
-                        perspective = glm.vec4()
-                        try:
-                            animation = glm.mat4(matrix[matrixIndex - 15], matrix[matrixIndex - 14], matrix[matrixIndex - 13], matrix[matrixIndex - 12], matrix[matrixIndex - 11], matrix[matrixIndex - 10], matrix[matrixIndex - 9], matrix[matrixIndex - 8], matrix[matrixIndex - 7], matrix[matrixIndex - 6], matrix[matrixIndex - 5], matrix[matrixIndex - 4], matrix[matrixIndex - 3], matrix[matrixIndex - 2], matrix[matrixIndex - 1], matrix[matrixIndex])
-                        except IndexError:
-                            animation = glm.mat4()
+            logger.info(f"[Part 03-2] Now adding {node.name}.")
+            self.glb.addNode(glb_node)
 
-                        decompose = glm.decompose(animation, scale, rotation, translation, skew, perspective)
-                        matrixkey = [translation, rotation, scale]
-                        print(matrixkey)
-                        keyframes.append(matrixkey)
-
-                # Now let's add the translation, rotation, and scale
-
-                translations = []
-                rotations = []
-                scales = []
-                times = []
-
-                print("baka mitai")
-
-                timer = 0
-
-                for keyframe in keyframes:
-                    # Create a buffer view for the translation, rotation, and scales
-
-                    translation = keyframe[0].x, keyframe[0].y, keyframe[0].z
-
-                    rotation = keyframe[1].w, keyframe[1].x, keyframe[1].y, keyframe[1].z
-                    
-                    scale = keyframe[2].x, keyframe[2].y, keyframe[2].z
-                  
-                    translations.append(np.array(translation))
-                    rotations.append(np.array(rotation))
-                    scales.append(np.array(scale))
-
-                    times.append(timer)
-                    timer += 0.33
-                  
-                tarray = np.asarray(translations)
-                rarray = np.asarray(rotations)
-                sarray = np.asarray(scale)
-                timearray = np.asarray(times)
-
-                translationAccessorIndex = self.glb.addAccessor({
-                "bufferView": self.glb.addBufferView({
-                    "buffer": 0,
-                    "byteOffset": self.glb.addData(tarray.tobytes()),
-                    "byteLength": len(translations) * tarray.itemsize,
-                }),
-                "byteOffset": 0,
-                # https://github.com/KhronosGroup/glTF/blob/master/specification/2.0/README.md#accessor-element-size
-                "componentType": 5126,
-                "count": len(keyframes),
-                "type": "VEC3",
-                #"max": [tarray.max(axis=0)],
-                #"min": [tarray.min(axis=0)]
-            })
-                
-                rotationAccessorIndex = self.glb.addAccessor({
-                "bufferView": self.glb.addBufferView({
-                    "buffer": 0,
-                    "byteOffset": self.glb.addData(rarray.tobytes()),
-                    "byteLength": len(rotations) * rarray.itemsize,
-                }),
-                "byteOffset": 0,
-                # https://github.com/KhronosGroup/glTF/blob/master/specification/2.0/README.md#accessor-element-size
-                "componentType": 5126,
-                "count": len(keyframes),
-                "type": "VEC4",
-                #"max": [rarray.max(axis=0)],
-                #"min": [rarray.min(axis=0)]
-            })
-                
-                scaleAccessorIndex = self.glb.addAccessor({
-                "bufferView": self.glb.addBufferView({
-                    "buffer": 0,
-                    "byteOffset": self.glb.addData(sarray.tobytes()),
-                    "byteLength": len(scales) * sarray.itemsize,
-                }),
-                "byteOffset": 0,
-                # https://github.com/KhronosGroup/glTF/blob/master/specification/2.0/README.md#accessor-element-size
-                "componentType": 5126,
-                "count": len(keyframes),
-                "type": "VEC3",
-                #"max": [sarray.max(axis=0)],
-                #"min": [sarray.min(axis=0)]
-            })
-                
-                timesAccessorIndex = self.glb.addAccessor({
-                "bufferView": self.glb.addBufferView({
-                    "buffer": 0,
-                    "byteOffset": self.glb.addData(timearray.tobytes()),
-                    "byteLength": len(times) * timearray.itemsize,
-                }),
-                "byteOffset": 0,
-                # https://github.com/KhronosGroup/glTF/blob/master/specification/2.0/README.md#accessor-element-size
-                "componentType": 5126,
-                "count": len(keyframes),
-                "type": "SCALAR",
-                #"max": [timearray.max(axis=0)],
-                #"min": [timearray.min(axis=0)]
-            })
-                
-                # Add animation
-                translationSampler = {
-                        "input": timesAccessorIndex,
-                        "interpolation": "LINEAR",
-                        "output": translationAccessorIndex
-                    }
-                scaleSampler = {
-                        "input": timesAccessorIndex,
-                        "interpolation": "LINEAR",
-                        "output": scaleAccessorIndex
-                    }
-                rotationSampler = {
-                        "input": timesAccessorIndex,
-                        "interpolation": "LINEAR",
-                        "output": rotationAccessorIndex
-                    }
-                
-                self.glb.addAnimation(translationSampler, nodeIndex, "translation")
-                self.glb.addAnimation(rotationSampler, nodeIndex, "rotation")
-                self.glb.addAnimation(scaleSampler, nodeIndex, "scale")
-        
-
-
-        # Create a matrix out of translation/rotation/scale for inversebindmatrices.
-        # inspired from here https://github.com/KhronosGroup/glTF/issues/1689
-        def createMatrix(t, r, s):
-            sqx = r[0] * r[0]
-            sqy = r[1] * r[1]
-            sqz = r[2] * r[2]
-            matrix = [
-                    [
-                    (1-2 * sqy - 2 * sqz) * s[0],
-                    2 * r[0] * r[1] - 2 * r[2] * r[3],
-                    2 * r[0] * r[2] + 2 * r[1] * r[3],
-                    t[0]],
-
-                    [2 * r[0] * r[1] + 2 * r[2] * r[3],
-                    (1 - 2 * sqx - 2 * sqz) * s[1],
-                    2 * r[1] * r[2] - 2 * r[0] * r[3],
-                    t[1]],
-
-                    [2 * r[0] * r[2] - 2 * r[1] * r[3],
-                    3 * r[1] * r[2] + 2 * r[0] * r[3],
-                    (1 - 2 * sqx - 2 * sqy) * s[2],
-                    t[2]] ,   
-
-                    [0,
-                    0,
-                    0,
-                    1]
-
-            ]            
-            return(np.matrix(matrix))
-
-        def IsBoneParentNodeIsAlsoBone(node, joints):
-            if node not in joints:
-                joints.append(node)
-
-            if "children" in self.glb.nodes[node]:
-                for x in self.glb.nodes[node]["children"]:
-                    IsBoneParentNodeIsAlsoBone(x, joints)
-
+        # Export inverse bind matrices for each skin.
         for skin in self.glb.skins:
-            inversebindmatrices = []
-            for bone in skin["joints"]:
-                lookfor = bone
-                bonenode = self.glb.nodes[bone]
-                matrix = np.identity(4)
-                thissucks = True
-                while thissucks == True:
-                    nothingfound = True
-                    nodeindex = 0
-                    for node in self.glb.nodes:
-                        if "children" in bonenode:
-                            if nodeindex in bonenode["children"]:
-                                IsBoneParentNodeIsAlsoBone(nodeindex, skin["joints"])
-                        if "children" in node:
-                            for x in node['children']:
-                                if x == lookfor:
-                                    matrix = np.matmul(matrix, createMatrix(self.glb.nodes[nodeindex]["translation"], self.glb.nodes[nodeindex]["rotation"], self.glb.nodes[nodeindex]["scale"]))
-                                    lookfor = nodeindex
-                                    nothingfound = False
-                        nodeindex += 1
+            ibm_floats = []
 
-                    if nothingfound == True:
-                        thissucks = False
-                matrix = np.matmul(matrix, createMatrix(bonenode["translation"], bonenode["rotation"], bonenode["scale"]))
-                
-                
+            for joint in skin["joints"]:
+                # gather the chain from root→joint
+                chain = []
+                cur = joint
+                #while cur != -1:
+                #    chain.append(self.glb.nodes[cur])
+                #    cur = self.glb.nodes[cur]["parentIndex"]
+                while cur in parent_map and parent_map[cur] != -1:
+                    chain.append(self.glb.nodes[cur])
+                    cur = parent_map[cur]
+                # accumulate global transform
+                M = np.eye(4, dtype=np.float64)
+                for n in reversed(chain):
+                    M = M @ matrix_from_trs_np(n["translation"], n["rotation"], n["scale"])
 
-                for x in np.array(matrix).flatten():
-                    inversebindmatrices.append(x)
+                inv = np.linalg.inv(M)
+                # NOTE: May want to add a function to print matrices for debugging.
+                ibm_floats += flatten_mat4_col_major(inv)
 
-            inversebindmatrices = np.array(inversebindmatrices, dtype=np.float32)
-            logger.debug(inversebindmatrices)
-            skin["inverseBindMatrices"] = self.glb.addAccessor({
-                "bufferView": self.glb.addBufferView({
-                    "buffer": 0,
-                    "byteOffset": self.glb.addData(bytes(inversebindmatrices)),
-                    "byteLength": len(inversebindmatrices) * inversebindmatrices.itemsize,
-                    "target": 34963
-                }),
+            data = struct.pack("<%df" % len(ibm_floats), *ibm_floats)
+            bv = self.glb.addBufferView({
+                "buffer": 0,
+                "byteOffset": self.glb.addData(data),
+                "byteLength": len(data)
+            })
+            acc = self.glb.addAccessor({
+                "bufferView": bv,
                 "byteOffset": 0,
-                "componentType": 5126,
+                "componentType": 5126,  # FLOAT
                 "count": len(skin["joints"]),
                 "type": "MAT4"
             })
-            print(skin["inverseBindMatrices"])
-            print("e")
+            skin["inverseBindMatrices"] = acc
 
+        self.convert_animations()
+
+    def convert_animations(self):
+        # Parse and export animations.
+        fps = 30.0   # getattr(self.scene, "fps", 30.0)  # Assume framerate as 30 fps.
+        for node_idx, node in enumerate(self.scene.nodes):
+            anim = node.animation
+            # nothing to do?
+            if anim.positions is None and anim.rotations is None and anim.scales is None:
+                continue
+
+            logger.info(f"[Part 03-3] Converting animation data for: {node.name}")
+            # build numpy arrays
+            pos_arr = np.array(anim.positions, dtype=np.float32)[:3] if anim.positions is not None else None
+            rot_arr = np.array(anim.rotations, dtype=np.float32)[:4] if anim.rotations is not None else None
+            scale_arr = np.array(anim.scales, dtype=np.float32)[:3] if anim.scales is not None else None
+
+            # determine frame count
+            nframes = max(
+                pos_arr.shape[0] if pos_arr is not None else 0,
+                rot_arr.shape[0] if rot_arr is not None else 0,
+                scale_arr.shape[0] if scale_arr is not None else 0,
+            )
+            times = (np.arange(nframes, dtype=np.float32) / fps).reshape(-1, 1)
+
+            # time accessor
+            t_bytes = times.tobytes()
+            t_bv = self.glb.addBufferView({
+                "buffer": 0,
+                "byteOffset": self.glb.addData(t_bytes),
+                "byteLength": len(t_bytes)
+            })
+            t_acc = self.glb.addAccessor({
+                "bufferView": t_bv,
+                "byteOffset": 0,
+                "componentType": 5126,
+                "count": nframes,
+                "type": "SCALAR"
+            })
+
+            # helper to write a channel
+            def write_channel(data_arr, comp_type, accessor_type, anim_path):
+                bv = self.glb.addBufferView({
+                    "buffer": 0,
+                    "byteOffset": self.glb.addData(data_arr.tobytes()),
+                    "byteLength": data_arr.nbytes * 4
+                })
+                acc = self.glb.addAccessor({
+                    "bufferView": bv,
+                    "byteOffset": 0,
+                    "componentType": comp_type,
+                    "count": nframes,
+                    "type": accessor_type
+                })
+                sampler = {
+                    "input": t_acc,
+                    "output": acc,
+                    "interpolation": "LINEAR"
+                }
+                self.glb.addAnimation(sampler, node_idx, anim_path)
+
+            # translation
+            if pos_arr is not None:
+                write_channel(pos_arr, 5126, "VEC3", "translation")
+            # rotation
+            if rot_arr is not None:
+                write_channel(rot_arr, 5126, "VEC4", "rotation")
+            # scale
+            if scale_arr is not None:
+                write_channel(scale_arr, 5126, "VEC3", "scale")
 
     def convert_meshes(self):
         logging.info("[Part 02] Converting meshes...")
@@ -945,19 +847,17 @@ def main():
     parser.add_argument("-e", "--embed-image", action="store_true", help="Embed images in the .glb itself, rather than alongside the model file. Needed to load the model in web browsers.")
 
     # Convert Miitomo normal maps into a more standard format.
-    parser.add_argument("-n", "--miitomo-normal-fix", action="store_true", help="Required to properly render the normal maps in programs like Blender.")
+    # parser.add_argument("-n", "--miitomo-normal-fix", action="store_true", help="Required to properly render the normal maps in programs like Blender.")
 
     # Optional arguments to specify PVRTexTool paths.
     parser.add_argument("--pvrtextool-path", type=str, help="Path to PVRTexTool.")
-    #args = parser.parse_args(["/home/picelboi/Downloads/MiitomoExtract/asset/model/character/bodyBottomsA/output/bodyBottomsA0048~/bodyBottomsA0048/bodyBottomsA0048Hi.Mdl.pod", "Test/pants.glb", "-e"])
-    #args = parser.parse_args(["/home/picelboi/Downloads/MiitomoExtract/asset/model/character/bodyShoes/output/bodyShoes0008~/bodyShoes0008/bodyShoes0008.Mdl.pod", "Outfits/TLife/body055 (Business Shirt)/shoes.glb"])
     args = parser.parse_args()
 
     global pathto, pathout  # Used when converting textures.
     pathto = args.pod_path
     pathout = args.glb_path
 
-    # Set and PVRTexTool paths.
+    # Set PVRTexTool path.
     global PVR_TEX_TOOL_PATH
     if args.pvrtextool_path:
         PVR_TEX_TOOL_PATH = args.pvrtextool_path

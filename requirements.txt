@@ -1,0 +1,4 @@
+coloredlogs
+Pillow
+PyGLM
+texture2ddecoder
