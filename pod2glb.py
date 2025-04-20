@@ -25,7 +25,7 @@ try:
     import numpy as np
     hasnumpy = True
 except ImportError as e:
-    logging.warning(f"[WARNING] numpy could not be imported: {e}. Will not be able to calculate bounding box which is probably fine")
+    logging.warning(f"numpy could not be imported: {e}. Will not be able to calculate bounding box which is probably fine")
 
 # Override default paths for tools.
 # These are overridden by the argparse arguments.
@@ -182,7 +182,7 @@ class POD2GLB:
     def save(self, path):
         logging.info("[Part 06] Saving all data to a GLB format...")
         if xmlroot is not None:
-            logging.warning("[WARNING] Due to constraints with GLTF, any Mask textures found will be attached as \"Emission\". It is up to you to reattach and correctly apply this map.")
+            logging.warning("Due to constraints with GLTF, any Mask textures found will be attached as \"Emission\". It is up to you to reattach and correctly apply this map.")
         self.glb.save(path)
         logging.info("[FINISH!] Done!")
 
@@ -193,7 +193,7 @@ class POD2GLB:
             samp = material.findall("Sampler2D")
             for sample in samp:
                 samplers += 1
-        logging.debug(f"[DEBUG] Found {samplers} in XML file.")
+        logging.debug(f"Found {samplers} in XML file.")
         return samplers
 
     @staticmethod
@@ -201,7 +201,7 @@ class POD2GLB:
         name = str(sampler.attrib["Name"])
         filename = sampler.find("FileName").text
         if filename is None:
-            logging.debug(f"[DEBUG] Texture {name} does not have a filename, marking as unused.")
+            logging.debug(f"Texture {name} does not have a filename, marking as unused.")
             return None  # Texture is not used.
         # Replace .tga with .png: vv
         path = str(filename).replace(".tga", ".png")
@@ -222,20 +222,19 @@ class POD2GLB:
         if PVR_TEX_TOOL_PATH != "":
             overridden_text = "(OVERRIDDEN!) "
             pvrtextool_path = PVR_TEX_TOOL_PATH
-        logging.debug(f"[DEBUG] Path for PVRTexToolCLI {overridden_text}is: {pvrtextool_path}")
+        logging.debug(f"Path for PVRTexToolCLI {overridden_text}is: {pvrtextool_path}")
         pvrtextool_exists = path.exists(pvrtextool_path)
         ret = False if not pvrtextool_exists else pvrtextool_path
         return ret
 
     @staticmethod
     def convert_texture_single(tool_path, input_file, output):
-        logging.debug(f"[DEBUG] Running PVRTexTool. Will be saved at {output}")
+        logging.debug(f"Running PVRTexTool. Will be saved at {output}")
         sp.run([
             tool_path,
             "-d", output,
             "-i", input_file,
-            # Required to remove the _Out files without a janky fix.
-            "-noout"
+            "-noout"  # Tells the tool to not produce _Out files.
         ], check=True)  # Tool will output to console.
 
         # Deprecated.
@@ -290,12 +289,12 @@ class POD2GLB:
             # Apply alpha maps.
             if not diffusearray:  # array is empty?
                 return  # assuming we have nothing else to do
-            print("[HOTFIX] Now merging alpha maps with albedo textures to conform with glTF specs.")
+            logging.info("[HOTFIX] Now merging alpha maps with albedo textures to conform with glTF specs.")
             for diffusemap in diffusearray:
                 for comalpha in range(len(diffusearray)):
                     diffusepath = diffusemap
                     if diffusepath is None or comalpha >= len(alphaarray):
-                        logging.debug("[DEBUG] Skipping alpha maps.")
+                        logging.debug("Skipping alpha maps.")
                         continue
                     try:
                         alphamap = PIL.Image.open(alphaarray[comalpha]).convert("L")
@@ -306,9 +305,9 @@ class POD2GLB:
                         alphamap.resize(alpharesize)
                         diffusemap.putalpha(alphamap)
                         diffusemap.save(diffusepath)
-                        logging.debug("[DEBUG] Applied alpha map to diffuse map and re-saved.")
+                        logging.debug("Applied alpha map to diffuse map and re-saved.")
                     except FileNotFoundError as e:
-                        logging.debug(f"[DEBUG] Caught: {e}. Not applying non-existent alpha.")
+                        logging.debug(f"Caught: {e}. Not applying non-existent alpha.")
 
             # Miitomo normal maps
 
@@ -340,10 +339,10 @@ class POD2GLB:
 
                 if texture["name"] == "uAlbedoTexture":
                     diffusearray.append(abspath)
-                    logging.debug("[DEBUG] Diffuse Map found.")
+                    logging.debug("Diffuse Map found.")
                 elif texture["name"] == "uAlphaTexture":
                     alphaarray.append(abspath)
-                    logging.debug("[DEBUG] Alpha Map found.")
+                    logging.debug("Alpha Map found.")
 
         # Convert textures here.
         self.convert_textures(alphaarray, diffusearray)
@@ -354,7 +353,7 @@ class POD2GLB:
                 if texture is None:
                     continue
                 if texture["name"] not in self.sampler_table.keys():
-                    logging.debug(f"[DEBUG] Skipping image {texture["name"]} since it is not in sampler_table and will not be added as a sampler either.")
+                    logging.debug(f"Skipping image {texture["name"]} since it is not in sampler_table and will not be added as a sampler either.")
                     continue
 
                 mag = sampler.find("GL_TEXTURE_MAG_FILTER")
@@ -378,7 +377,7 @@ class POD2GLB:
                         "byteOffset": self.glb.addData(image_data),  # buffer offset
                         "byteLength": len(image_data)
                     })
-                    logging.debug(f"[DEBUG] Read image in, adding as buffer view index {buffer_view_index}")
+                    logging.debug(f"Read image in, adding as buffer view index {buffer_view_index}")
                     # Add the image with bufferView and MIME type
                     self.glb.addImage({
                         "bufferView": buffer_view_index,
@@ -449,9 +448,9 @@ class POD2GLB:
         for (materialIndex, material) in enumerate(self.scene.materials):
             # Settings to list which option is available
             for materialkeys in xmlmaterial:
-                logging.debug(f"[DEBUG] Material from POD Name is {material.name}, from XML: {materialkeys.attrib["Name"]}")
+                logging.debug(f"Material from POD Name is {material.name}, from XML: {materialkeys.attrib["Name"]}")
                 if str(material.name) != materialkeys.attrib["Name"]:
-                    #print(f"[DEBUG] Material is not the same! {materialkeys.attrib["Name"]} is not the same as {material.name}")
+                    #logging.debug(f"Material is not the same! {materialkeys.attrib["Name"]} is not the same as {material.name}")
                     continue
 
                 logging.info(f"[Part 05-1] Adding material {material.name}...")
@@ -467,10 +466,10 @@ class POD2GLB:
                 }
                 culling_key = materialkeys.find("Culling")
                 if culling_key == "Front":
-                    logging.warning("[WARNING] Culling is set to Front. This is not supported.")
+                    logging.warning("Culling is set to Front. This is not supported.")
                 # Double sided as false by default.
                 double_sided = cull_mode_to_double_sided.get(culling_key, False)
-                logging.debug(f"[DEBUG] Material {material.name} {"does NOT have" if double_sided else "has"} backface culling on.")
+                logging.debug(f"Material {material.name} {"does NOT have" if double_sided else "has"} backface culling on.")
 
                 PODMaterial = {
                     "name": material.name,
@@ -496,7 +495,7 @@ class POD2GLB:
                     name = sampler.attrib["Name"]
                     material_tex_name = self.sampler_table.get(name, None)
                     if material_tex_name is not None:
-                        logging.debug(f"[DEBUG] Has sampler {name}!")
+                        logging.debug(f"Has sampler {name}!")
                         # glTF validator: Unexpected property. vv
                         # Deprecated.
                         #if sampler.find("UVIdx") is not None:
@@ -828,7 +827,7 @@ class POD2GLB:
             deinterleaved = mesh.DeinterleaveAttributes()
             # above returns { "POSITION": bytes, ... }
 
-            print(f"[DEBUG] Creating bufferView for mesh {meshIndex}, length: {len(mesh.vertexElementData[0])}")
+            logging.debug(f"Creating bufferView for mesh {meshIndex}, length: {len(mesh.vertexElementData[0])}")
             hasJoints = False
             hasWeights = False
 
@@ -844,7 +843,7 @@ class POD2GLB:
                 })
                 """
 
-                print(f"[DEBUG] Creating bufferView for mesh {meshIndex}, length: {len(mesh.vertexElementData[0])}")
+                logging.debug(f"Creating bufferView for mesh {meshIndex}, length: {len(mesh.vertexElementData[0])}")
 
                 element = vertexElements[name]
 
@@ -911,7 +910,7 @@ class POD2GLB:
                     accessor_data["max"] = [float(x) for x in positions.max(axis=0)]
 
                 accessorIndex = self.glb.addAccessor(accessor_data)
-                print(f"[DEBUG] Creating accessor {accessorIndex} for attribute {name}")
+                logging.debug(f"Creating accessor {accessorIndex} for attribute {name}")
                 attributes[name] = accessorIndex
 
                 if hasWeights:
@@ -925,7 +924,7 @@ class POD2GLB:
 
             # POD meshes only have one primitive?
             # https://github.com/KhronosGroup/glTF/blob/master/specification/2.0/README.md#primitive
-            print("[Part 02-1] Adding mesh...")
+            logging.info("[Part 02-1] Adding mesh...")
             self.glb.addMesh({
                 "primitives": [{
                     "attributes": attributes,
@@ -965,12 +964,12 @@ def main():
 
     global embedimage
     if args.embed_image is not None:
-        print("[DEBUG] Embedding all images in the output .glb.")
+        logging.debug("Embedding all images in the output .glb.")
         embedimage = args.embed_image
 
     # Check if a companion XML exists with the POD.
     expected_xml_path = str(os.path.basename(pathto)).replace(".pod", "_model.xml")
-    print(f"[DEBUG] Expected XML path for this POD: {expected_xml_path}")
+    logging.debug(f"Expected XML path for this POD: {expected_xml_path}")
 
     global xmlroot  # Global that's initialized to None.
     for root, dirs, files in os.walk(os.path.dirname(pathto)):
@@ -978,11 +977,11 @@ def main():
             if file != expected_xml_path:
                 continue  # Skip if this file is not expected.
             # File has been found:
-            print(f"[XML] XML file found: {str(file)}")
+            logging.info(f"[XML] XML file found: {str(file)}")
             xmlpath = os.path.join(os.path.dirname(pathto), file)
             xmldata = etree.parse(xmlpath)
             xmlroot = xmldata.getroot()  # Global
-            print(f"Model is called \"{xmlroot.attrib["Name"]}\"")
+            logging.info(f"Model is called \"{xmlroot.attrib["Name"]}\"")
 
     converter = POD2GLB.open(pathto)
     converter.save(pathout)

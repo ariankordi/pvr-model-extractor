@@ -60,6 +60,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Convert PVR textures to PNG format.")
     parser.add_argument('-i', '--input', required=True, help="Path to the input PVR file.")
     parser.add_argument('-d', '--output_dir', required=True, help="Directory to save the output PNG.")
+    parser.add_argument('-noout', help="Option is just here to stay compatible with PVRTexTool.", action="store_true")
     args = parser.parse_args()
 
     # Load the PVR texture
