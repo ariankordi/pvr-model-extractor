@@ -1,5 +1,4 @@
-from PowerVR.EPOD import *
-import logging
+# from PowerVR.EPOD import *
 
 class PVRModel:
   def __init__(self):

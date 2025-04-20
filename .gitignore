@@ -123,28 +123,19 @@ venv.bak/
 # mypy
 .mypy_cache/
 
-# Prevent us from getting copyrighted
-PVRTexToolCLI
-pvrtextoolcli
-PVRTEXTOOLCLI
-PVRTexToolCLI.exe
-pvrtextoolcli.exe
-PVRTEXTOOLCLI.exe
+# Avoid including PowerVR binaries.
+pvrtextool.*
+# Noesis
 noex64/
 optionalplugins/
 plugins/
 scenes/
 sample_pbr_e3.dds
 noegl_opengl.dll
-Noesis64.exe
-Noesis.exe
-noesiskinect.dll
+noesis*
 ReadMe.txt
 pluginsource.zip
 
-Mods/Hats/headwear0304.zip
-.gitignore
-Mods/Hats/PBHardHat/headwear0304/headwear0304.Mdl_model.xml
-Mods/
-Test/PicelBoi.gltf
-Test/pantsout.gltf
+# picelboi personal folders
+Mods/*
+Test/*
