@@ -117,7 +117,7 @@ class GLBExporter:
     
 
   def buildJSON(self):
-    return {
+    obj = {
       "asset": self.asset,
       "scene": self.scene,
       "scenes": self.scenes,
@@ -130,9 +130,12 @@ class GLBExporter:
       "textures": self.textures,
       "images": self.images,
       "samplers": self.samplers,
-      #"animations": self.animations,
-      "skins": self.skins
+      #"animations": self.animations
     }
+    # only add skins if it is populated (cannot be empty)
+    if len(self.skins):
+      obj["skins"] = self.skins
+    return obj
   
   def save(self, path):
     with open(path, "wb") as f:
