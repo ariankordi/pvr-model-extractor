@@ -143,6 +143,70 @@ def flatten_mat4_col_major(mat4):
     """
     return mat4.T.astype(np.float32).reshape(-1).tolist()
 
+def quaternion_from_matrix(R):
+    """
+    Convert a 3×3 rotation matrix to a quaternion [x, y, z, w].
+    """
+    trace = R[0,0] + R[1,1] + R[2,2]
+    if trace > 0:
+        S = np.sqrt(trace + 1.0) * 2
+        w = 0.25 * S
+        x = (R[2,1] - R[1,2]) / S
+        y = (R[0,2] - R[2,0]) / S
+        z = (R[1,0] - R[0,1]) / S
+    else:
+        # Find the largest diagonal element
+        if R[0,0] > R[1,1] and R[0,0] > R[2,2]:
+            S = np.sqrt(1.0 + R[0,0] - R[1,1] - R[2,2]) * 2
+            w = (R[2,1] - R[1,2]) / S
+            x = 0.25 * S
+            y = (R[0,1] + R[1,0]) / S
+            z = (R[0,2] + R[2,0]) / S
+        elif R[1,1] > R[2,2]:
+            S = np.sqrt(1.0 + R[1,1] - R[0,0] - R[2,2]) * 2
+            w = (R[0,2] - R[2,0]) / S
+            x = (R[0,1] + R[1,0]) / S
+            y = 0.25 * S
+            z = (R[1,2] + R[2,1]) / S
+        else:
+            S = np.sqrt(1.0 + R[2,2] - R[0,0] - R[1,1]) * 2
+            w = (R[1,0] - R[0,1]) / S
+            x = (R[0,2] + R[2,0]) / S
+            y = (R[1,2] + R[2,1]) / S
+            z = 0.25 * S
+    return np.array([x, y, z, w], dtype=np.float32)
+
+def decompose_matrices(matrix_data):
+    """
+    POD stores 16-float row-major matrices per keyframe.
+    Returns pos_arr (F×3), rot_arr (F×4), scale_arr (F×3).
+    """
+    flat = np.asarray(matrix_data, dtype=np.float32)
+    frames = flat.size // 16
+    mats = flat.reshape((frames, 4, 4))          # row-major
+
+    # translation = last column
+    pos = mats[:, :3, 3]
+
+    # scale = length of each row’s XYZ part
+    row0 = mats[:, 0, :3]
+    row1 = mats[:, 1, :3]
+    row2 = mats[:, 2, :3]
+    sx = np.linalg.norm(row0, axis=1)
+    sy = np.linalg.norm(row1, axis=1)
+    sz = np.linalg.norm(row2, axis=1)
+    scale = np.stack([sx, sy, sz], axis=1)
+
+    # normalized rotation rows
+    R_norm = np.empty((frames, 3, 3), dtype=np.float32)
+    R_norm[:,0,:] = row0 / sx[:, None]
+    R_norm[:,1,:] = row1 / sy[:, None]
+    R_norm[:,2,:] = row2 / sz[:, None]
+
+    # quaternion per frame
+    rot = np.stack([quaternion_from_matrix(R_norm[i]) for i in range(frames)], axis=0)
+
+    return pos.astype(np.float32), rot, scale.astype(np.float32)
 
 class POD2GLB:
     bones = {}
@@ -187,24 +251,33 @@ class POD2GLB:
         self.glb: GLBExporter = GLBExporter()
         self.pod: PVRPODLoader|None = None
         self.scene: PVRModel|None = None
+        self.nodes_scene: PVRModel|None = None
         #self.fix_uvs = True
 
     @classmethod
-    def open(cls, inpath):
+    def open(cls, inpath, nodes_inpath=None):
         logging.info("[Part 00] Loading POD...")
         converter = cls()
-        converter.load(inpath)
+        converter.load(inpath, nodes_inpath)
         return converter
 
-    def load(self, inpath):
+    def load(self, inpath, nodes_inpath):
         logging.info("[Part 01] Starting up all loaders...")
         # create a glb exporter
         #self.glb = GLBExporter()
         # create a pvr pod parser
         self.pod = PVRPODLoader.open(inpath)
         self.scene = self.pod.scene
+
+        if nodes_inpath is not None:
+            self.nodes_pod = PVRPODLoader.open(nodes_inpath)
+            self.nodes_scene = self.nodes_pod.scene
+        else:
+            self.nodes_scene = self.scene
+
         self.convert_meshes()
         self.convert_nodes()
+        self.convert_animations()
         self.add_textures()
         self.convert_materials()
 
@@ -559,9 +632,12 @@ class POD2GLB:
         logger.info("[Part 03] Converting nodes...")
         parent_map = {}
 
+        if self.nodes_scene is None:
+            raise Exception('POD2GLB is not initialized.')
+
         # Create nodes.
-        for idx, node in enumerate(self.scene.nodes):
-            children = [i for i, n in enumerate(self.scene.nodes) if n.parentIndex == idx]
+        for idx, node in enumerate(self.nodes_scene.nodes):
+            children = [i for i, n in enumerate(self.nodes_scene.nodes) if n.parentIndex == idx]
             parent_map[idx] = node.parentIndex
 
             # fallback TRS
@@ -635,76 +711,83 @@ class POD2GLB:
             })
             skin["inverseBindMatrices"] = acc
 
-        self.convert_animations()
-
     def convert_animations(self):
-        # Parse and export animations.
-        fps = 30.0   # getattr(self.scene, "fps", 30.0)  # Assume framerate as 30 fps.
-        for node_idx, node in enumerate(self.scene.nodes):
+        if self.nodes_scene is None:
+            raise Exception('POD2GLB is not initialized.')
+
+        fps_scene = getattr(self.nodes_scene, "fps", 0)
+        if fps_scene <= 0:
+            logger.warning("Scene FPS is 0 - skipping all animations.")
+            return
+
+        for node_idx, node in enumerate(self.nodes_scene.nodes):
             anim = node.animation
             # nothing to do?
-            if anim.positions is None and anim.rotations is None and anim.scales is None:
+            if (anim.positions is None and anim.rotations is None
+                and anim.scales    is None and anim.matrices  is None):
                 continue
 
             logger.info(f"[Part 03-3] Converting animation data for: {node.name}")
             # build numpy arrays
-            pos_arr = np.array(anim.positions, dtype=np.float32)[:3] if anim.positions is not None else None
-            rot_arr = np.array(anim.rotations, dtype=np.float32)[:4] if anim.rotations is not None else None
-            scale_arr = np.array(anim.scales, dtype=np.float32)[:3] if anim.scales is not None else None
 
-            # determine frame count
-            nframes = max(
-                pos_arr.shape[0] if pos_arr is not None else 0,
-                rot_arr.shape[0] if rot_arr is not None else 0,
-                scale_arr.shape[0] if scale_arr is not None else 0,
-            )
-            times = (np.arange(nframes, dtype=np.float32) / fps).reshape(-1, 1)
+            # ─── Build TRS numpy arrays ──────────────────────────
+            if anim.matrices is not None and len(anim.matrices) >= 16:
+                pos_arr, rot_arr, scale_arr = decompose_matrices(anim.matrices)
+                frames = pos_arr.shape[0]
+            else:
+                pos_arr   = (np.array(anim.positions[:3], dtype=np.float32)
+                                .reshape(1,3) if anim.positions else None)
+                rot_arr   = (np.array(anim.rotations[:4], dtype=np.float32)
+                                .reshape(1,4) if anim.rotations else None)
+                scale_arr = (np.array(anim.scales[:3],    dtype=np.float32)
+                                .reshape(1,3) if anim.scales    else None)
+                frames = 1
 
-            # time accessor
-            t_bytes = times.tobytes()
+            # if fps is zero, skip this node
+            fps = fps_scene
+            if fps <= 0:
+                continue
+
+            # time array
+            times = (np.arange(frames, dtype=np.float32) / fps).reshape(-1,1)
             t_bv = self.glb.addBufferView({
                 "buffer": 0,
-                "byteOffset": self.glb.addData(t_bytes),
-                "byteLength": len(t_bytes)
+                "byteOffset": self.glb.addData(times.tobytes()),
+                "byteLength": times.nbytes
             })
             t_acc = self.glb.addAccessor({
                 "bufferView": t_bv,
                 "byteOffset": 0,
                 "componentType": 5126,
-                "count": nframes,
-                "type": "SCALAR"
+                "count": frames,
+                "type": "SCALAR",
+                "min": [float(times.min())],
+                "max": [float(times.max())]
             })
 
-            # helper to write a channel
-            def write_channel(data_arr, comp_type, accessor_type, anim_path):
+            # helper
+            def write_channel(arr, accessor_type, anim_path):
                 bv = self.glb.addBufferView({
                     "buffer": 0,
-                    "byteOffset": self.glb.addData(data_arr.tobytes()),
-                    "byteLength": data_arr.nbytes * 4
+                    "byteOffset": self.glb.addData(arr.tobytes()),
+                    "byteLength": arr.nbytes
                 })
                 acc = self.glb.addAccessor({
                     "bufferView": bv,
                     "byteOffset": 0,
-                    "componentType": comp_type,
-                    "count": nframes,
+                    "componentType": 5126,
+                    "count": frames,
                     "type": accessor_type
                 })
-                sampler = {
-                    "input": t_acc,
-                    "output": acc,
-                    "interpolation": "LINEAR"
-                }
+                sampler = {"input": t_acc, "output": acc, "interpolation": "LINEAR"}
                 self.glb.addAnimation(sampler, node_idx, anim_path)
 
-            # translation
             if pos_arr is not None:
-                write_channel(pos_arr, 5126, "VEC3", "translation")
-            # rotation
+                write_channel(pos_arr,   "VEC3", "translation")
             if rot_arr is not None:
-                write_channel(rot_arr, 5126, "VEC4", "rotation")
-            # scale
+                write_channel(rot_arr,   "VEC4", "rotation")
             if scale_arr is not None:
-                write_channel(scale_arr, 5126, "VEC3", "scale")
+                write_channel(scale_arr, "VEC3", "scale")
 
     def convert_meshes(self):
         logging.info("[Part 02] Converting meshes...")
@@ -849,6 +932,7 @@ def main():
     # Add positional arguments.
     parser.add_argument("pod_path", type=str, help="Path to the input POD file. The XML and textures are expected to be relative to this.")
     parser.add_argument("glb_path", type=str, help="Path to the output glTF model/.glb file.")
+    parser.add_argument("-nodes_pod_path", type=str, help="TBD.")
 
     # Embed images in GLB?
     parser.add_argument("-e", "--embed-image", action="store_true", help="Embed images in the .glb itself, rather than alongside the model file. Needed to load the model in web browsers.")
@@ -890,7 +974,7 @@ def main():
             xmlroot = xmldata.getroot()  # Global
             logging.info(f"Model is called \"{xmlroot.attrib['Name']}\"")
 
-    converter = POD2GLB.open(pathto)
+    converter = POD2GLB.open(pathto, args.nodes_pod_path)
     converter.save(pathout)
 
 if __name__ == "__main__":

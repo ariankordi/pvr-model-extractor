@@ -76,13 +76,11 @@ class GLBExporter:
     return index
 
   def addAnimation(self, sampler, nodeindex, path):
-    # Get the amount of samplers in samplers so far
-    samplerIndex = len(self.animations[0]["samplers"]) - 1
-
-    # now add the sampler
+    # samplerIndex is the index *before* we append
+    samplerIndex = len(self.animations[0]["samplers"])
+    # append the sampler
     self.animations[0]["samplers"].append(sampler)
-
-    # finally add the channel
+    # now append the channel pointing at that sampler
     channel = {
       "sampler": samplerIndex,
       "target": {
@@ -109,11 +107,13 @@ class GLBExporter:
       "textures": self.textures,
       "images": self.images,
       "samplers": self.samplers,
-      #"animations": self.animations
     }
     # only add skins if it is populated (cannot be empty)
     if len(self.skins):
       obj["skins"] = self.skins
+    # same with animations, use samplers array to test
+    if len(self.animations[0]["samplers"]):
+        obj["animations"] = self.animations
 
     return obj
 
