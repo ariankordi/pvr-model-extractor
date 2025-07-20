@@ -1,5 +1,5 @@
 import PIL.Image
-from PowerVR.PVRPODLoader import PVRPODLoader
+from PowerVR.PVRPODLoader import PVRPODLoader, PVRModel
 from GLB.GLBExporter import GLBExporter
 from xml.etree import ElementTree as etree
 from os import path
@@ -15,15 +15,9 @@ import struct  # For convert_attribute
 
 logger = logging.getLogger(__name__)
 coloredlogs.install(level="DEBUG")
-# Matrix decompose
 
-# numpy is only needed for calculating bounding box
-hasnumpy = False
-try:
-    import numpy as np
-    hasnumpy = True
-except ImportError as e:
-    logging.warning(f"numpy could not be imported: {e}. Will not be able to calculate bounding box which is probably fine")
+# numpy used for calculating bounding box, and matrix operations
+import numpy as np
 
 # Override default paths for tools.
 # These are overridden by the argparse arguments.
@@ -190,9 +184,9 @@ class POD2GLB:
     }
 
     def __init__(self):
-        self.glb = None
-        self.pod = None
-        self.scene = None
+        self.glb: GLBExporter = GLBExporter()
+        self.pod: PVRPODLoader|None = None
+        self.scene: PVRModel|None = None
         #self.fix_uvs = True
 
     @classmethod
@@ -205,7 +199,7 @@ class POD2GLB:
     def load(self, inpath):
         logging.info("[Part 01] Starting up all loaders...")
         # create a glb exporter
-        self.glb = GLBExporter()
+        #self.glb = GLBExporter()
         # create a pvr pod parser
         self.pod = PVRPODLoader.open(inpath)
         self.scene = self.pod.scene
@@ -226,7 +220,7 @@ class POD2GLB:
         samplers = 0
         for material in xmlmaterial:
             samp = material.findall("Sampler2D")
-            for sample in samp:
+            for _ in samp:
                 samplers += 1
         logging.debug(f"Found {samplers} in XML file.")
         return samplers
@@ -282,6 +276,8 @@ class POD2GLB:
         #    pass
 
     def add_textures_no_conversion(self):
+        if self.scene is None:
+            raise Exception('POD2GLB is not initialized.')
         for (textureIndex, texture) in enumerate(self.scene.textures):
             logging.info(f"[Part 04-1] Adding image {texture.getPath()}...")
 
@@ -300,7 +296,7 @@ class POD2GLB:
                 "source": textureIndex
             })
 
-    def convert_textures(self, alphaarray=[], diffusearray=[]):
+    def convert_textures(self, alphaarray: list[str]=[], diffusearray: list[str]=[]):
         if xmlroot is None:
             # Assumes all textures are in current directory.
             return self.add_textures_no_conversion()
@@ -311,7 +307,7 @@ class POD2GLB:
             dir_of_input = os.path.dirname(pathto)
             logging.info("[Part 04-2] Now converting all images. Walking path:")
 
-            for root, dirs, files in os.walk(dir_of_input):
+            for root, _, files in os.walk(dir_of_input):
                 for file in files:
                     if not str(file).endswith(".pvr"):
                         continue  # Skip all non-pvr files.
@@ -325,15 +321,15 @@ class POD2GLB:
             if not diffusearray:  # array is empty?
                 return  # assuming we have nothing else to do
             logging.info("[HOTFIX] Now merging alpha maps with albedo textures to conform with glTF specs.")
-            for diffusemap in diffusearray:
+            # TODO: Test this
+            for diffusepath in diffusearray:
                 for comalpha in range(len(diffusearray)):
-                    diffusepath = diffusemap
                     if diffusepath is None or comalpha >= len(alphaarray):
                         logging.debug("Skipping alpha maps.")
                         continue
                     try:
                         alphamap = PIL.Image.open(alphaarray[comalpha]).convert("L")
-                        diffusemap = PIL.Image.open(diffusemap).convert("RGB")
+                        diffusemap = PIL.Image.open(diffusepath).convert("RGB")
 
                         dw, dh = diffusemap.size
                         alpharesize = (dw, dh)
@@ -354,6 +350,8 @@ class POD2GLB:
             return self.add_textures_no_conversion()
         # Enchanced XML sampler import support
         xmlmaterials = xmlroot.find("Materials")
+        if xmlmaterials is None:
+            return self.add_textures_no_conversion()
         xmlmaterial = xmlmaterials.findall("Material")
         textureIndex = 0
 
@@ -388,20 +386,21 @@ class POD2GLB:
                 if texture is None:
                     continue
                 if texture["name"] not in self.sampler_table.keys():
-                    logging.debug(f"Skipping image {texture["name"]} since it is not in sampler_table and will not be added as a sampler either.")
+                    logging.debug(f"Skipping image {texture['name']} since it is not in sampler_table and will not be added as a sampler either.")
                     continue
 
-                mag = sampler.find("GL_TEXTURE_MAG_FILTER")
-                min = sampler.find("GL_TEXTURE_MIN_FILTER")
-                S = sampler.find("GL_TEXTURE_WRAP_S")
-                T = sampler.find("GL_TEXTURE_WRAP_T")
+                # TODO: Change from find to findtext, test this works
+                mag = sampler.findtext("GL_TEXTURE_MAG_FILTER") or ""
+                min = sampler.findtext("GL_TEXTURE_MIN_FILTER") or ""
+                S = sampler.findtext("GL_TEXTURE_WRAP_S") or ""
+                T = sampler.findtext("GL_TEXTURE_WRAP_T") or ""
 
-                magFilter = self.GLENUM.get(mag.text, self.GLENUM["GL_LINEAR"])  # Magnificiation filter
-                minFilter = self.GLENUM.get(min.text, self.GLENUM["GL_LINEAR"])  # Minification filter
-                wrapS = self.GLENUM.get(S.text, self.GLENUM["GL_REPEAT"])  # S (U) Wrapping Mode
-                wrapT = self.GLENUM.get(T.text, self.GLENUM["GL_REPEAT"])  # T (V) Wrapping Mode
+                magFilter = self.GLENUM.get(mag, self.GLENUM["GL_LINEAR"])  # Magnificiation filter
+                minFilter = self.GLENUM.get(min, self.GLENUM["GL_LINEAR"])  # Minification filter
+                wrapS = self.GLENUM.get(S, self.GLENUM["GL_REPEAT"])  # S (U) Wrapping Mode
+                wrapT = self.GLENUM.get(T, self.GLENUM["GL_REPEAT"])  # T (V) Wrapping Mode
 
-                logging.info(f"[Part 04-1] Adding image {texture["name"]}, path {texture["path"]}...")
+                logging.info(f"[Part 04-1] Adding image {texture['name']}, path {texture['path']}...")
 
                 if embedimage:
                     with open(os.path.join(os.path.dirname(pathout), texture["path"]), "rb") as img_file:
@@ -443,7 +442,9 @@ class POD2GLB:
         if xmlroot is not None:
             return self.convert_materials_with_xml()
         # Standard non-XML path.
-        for (materialIndex, material) in enumerate(self.scene.materials):
+        if self.scene is None:
+            raise Exception('POD2GLB is not initialized.')
+        for (_, material) in enumerate(self.scene.materials):
             materialGLB = {
                 "name": material.name,
             }
@@ -477,13 +478,17 @@ class POD2GLB:
             self.glb.addMaterial(materialGLB)
 
     def convert_materials_with_xml(self):
+        if xmlroot is None or self.scene is None:
+            return
         xmlmaterials = xmlroot.find("Materials")
+        if xmlmaterials is None:
+            return
         xmlmaterial = xmlmaterials.findall("Material")
         textureIndex = 0
-        for (materialIndex, material) in enumerate(self.scene.materials):
+        for (_, material) in enumerate(self.scene.materials):
             # Settings to list which option is available
             for materialkeys in xmlmaterial:
-                logging.debug(f"Material from POD Name is {material.name}, from XML: {materialkeys.attrib["Name"]}")
+                logging.debug(f"Material from POD Name is {material.name}, from XML: {materialkeys.attrib['Name']}")
                 if str(material.name) != materialkeys.attrib["Name"]:
                     #logging.debug(f"Material is not the same! {materialkeys.attrib["Name"]} is not the same as {material.name}")
                     continue
@@ -499,12 +504,12 @@ class POD2GLB:
                     # need to be flipped in the index
                     # buffer in order to simulate this.
                 }
-                culling_key = materialkeys.find("Culling")
+                culling_key = materialkeys.findtext("Culling") or ""
                 if culling_key == "Front":
                     logging.warning("Culling is set to Front. This is not supported.")
                 # Double sided as false by default.
                 double_sided = cull_mode_to_double_sided.get(culling_key, False)
-                logging.debug(f"Material {material.name} {"does NOT have" if double_sided else "has"} backface culling on.")
+                logging.debug(f"Material {material.name} {'does NOT have' if double_sided else 'has'} backface culling on.")
 
                 PODMaterial = {
                     "name": material.name,
@@ -703,6 +708,8 @@ class POD2GLB:
 
     def convert_meshes(self):
         logging.info("[Part 02] Converting meshes...")
+        if self.scene is None:
+            raise Exception('POD2GLB is not initialized.')
         for (meshIndex, mesh) in enumerate(self.scene.meshes):
             attributes = {}
             numFaces = mesh.primitiveData["numFaces"]
@@ -763,7 +770,7 @@ class POD2GLB:
                     .get(element["dataType"], None)
 
                 if componentType is None:
-                    raise NotImplementedError(f"Don't have glTF accessor type for corresponding EPVR vertex data type: {element["dataType"]}")
+                    raise NotImplementedError(f"Don't have glTF accessor type for corresponding EPVR vertex data type: {element['dataType']}")
 
                 # Create per-attribute bufferView using deinterleaved data
                 raw_bytes = align_to_4(deinterleaved[name])
@@ -796,7 +803,7 @@ class POD2GLB:
                 }
 
                 # Make bounding box for position.
-                if name == "POSITION" and hasnumpy:
+                if name == "POSITION":
                     # Import single vertex buffer.
                     data = np.frombuffer(mesh.vertexElementData[0], dtype=np.float32)
                     # 4 = sizeof(float)
@@ -872,7 +879,7 @@ def main():
     logging.debug(f"Expected XML path for this POD: {expected_xml_path}")
 
     global xmlroot  # Global that's initialized to None.
-    for root, dirs, files in os.walk(os.path.dirname(pathto)):
+    for _, _, files in os.walk(os.path.dirname(pathto)):
         for file in files:
             if file != expected_xml_path:
                 continue  # Skip if this file is not expected.
@@ -881,7 +888,7 @@ def main():
             xmlpath = os.path.join(os.path.dirname(pathto), file)
             xmldata = etree.parse(xmlpath)
             xmlroot = xmldata.getroot()  # Global
-            logging.info(f"Model is called \"{xmlroot.attrib["Name"]}\"")
+            logging.info(f"Model is called \"{xmlroot.attrib['Name']}\"")
 
     converter = POD2GLB.open(pathto)
     converter.save(pathout)
